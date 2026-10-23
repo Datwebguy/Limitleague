@@ -43,3 +43,6 @@ Repo: [https://github.com/strike-finance/strike-finance-skills](https://github.c
 - [https://github.com/strike-finance/strike-finance-skills](https://github.com/strike-finance/strike-finance-skills)
 - [https://github.com/strike-finance/strike-finance-hermes-skill](https://github.com/strike-finance/strike-finance-hermes-skill)
 - [https://github.com/strike-finance/strike-builder-reference](https://github.com/strike-finance/strike-builder-reference)
+
+## Limit enforcement point
+All limit checks happen in LimitLeague before any order is submitted to Strike. Only trades that pass the published hard limits are forwarded.
