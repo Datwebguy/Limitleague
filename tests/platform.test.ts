@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { db, initializeDatabase } from "../lib/db";
-import { createStrategy, followStrategy, listAudit, proposeTrade } from "../lib/platform";
+import { createStrategy, followStrategy, listAudit, proposeTrade, updateStrategy } from "../lib/platform";
 
 test.after(async () => { if (process.env.DATABASE_URL) await db().end(); });
 
@@ -32,4 +32,11 @@ test("a real paper proposal is checked, copied to followers, and audited", { ski
   const audit = await listAudit();
   assert.ok(audit.some(event => event.strategy_id === strategy.id && event.allowed));
   assert.ok(audit.some(event => event.strategy_id === strategy.id && !event.allowed));
+  await assert.rejects(() => updateStrategy(owner,strategy.id,{limits:{...strategy.limits,maxTotalExposureUsd:400}}),/only be tightened/);
+  await updateStrategy(owner,strategy.id,{paused:true});
+  const paused = await proposeTrade(owner, {
+    strategyId: strategy.id, market: "BTC-USD", side: "long", notionalUsd: 10, reason: "Paused proposal"
+  });
+  assert.equal(paused.ownerDecision?.decision.allowed,false);
+  assert.ok((await listAudit()).some(event => event.strategy_id === strategy.id && event.action === "Strategy paused"));
 });

@@ -43,7 +43,14 @@ export async function initializeDatabase() {
       allowed boolean NOT NULL, reasons jsonb NOT NULL, mode text NOT NULL,
       created_at timestamptz NOT NULL DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS strategy_events (
+      id uuid PRIMARY KEY, strategy_id uuid NOT NULL REFERENCES strategies(id),
+      actor_id uuid NOT NULL REFERENCES users(id), action text NOT NULL,
+      limits jsonb NOT NULL, paused boolean NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
     CREATE INDEX IF NOT EXISTS audit_events_strategy_time ON audit_events(strategy_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS strategy_events_strategy_time ON strategy_events(strategy_id, created_at DESC);
   `).then(() => undefined);
   return schemaReady;
 }

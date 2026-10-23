@@ -25,3 +25,8 @@ A strategy remains eligible for the main ranking only while it respects its publ
 
 ## Paper vs live
 Paper mode simulates fills against Strike market data under the same limit checker. Promoting to live keeps the identical limits.
+
+## Strike accounts and chains
+Strike supports Cardano, Ethereum, and Solana wallet identities. A strategy's live trades should use its owner's Strike account or a dedicated sub-account so its balance, positions, and risk budget can be verified independently. A follower needs authorization for their own account; the strategy owner's API wallet does not grant access to follower funds. Public account selectors can show account and position evidence without exposing an API-wallet private key.
+
+The signing key must stay on the server. LimitLeague records the proposal, limit decision, and resulting Strike order ID or rejection separately. A paper fill is never presented as a live fill.

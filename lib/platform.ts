@@ -38,11 +38,37 @@ export async function createStrategy(ownerId: string, name: string, description:
 
 export async function listAudit() {
   await initializeDatabase();
-  const result = await db().query(`SELECT a.id,a.strategy_id,a.market,a.side,a.reason,a.notional_usd::float AS notional_usd,
+  const [proposals, changes] = await Promise.all([db().query(`SELECT a.id,a.strategy_id,a.market,a.side,a.reason,a.notional_usd::float AS notional_usd,
     a.price::float AS price,a.allowed,a.reasons,a.mode,a.created_at,s.name AS strategy_name
     FROM audit_events a JOIN strategies s ON s.id=a.strategy_id WHERE a.user_id=s.owner_id
-    ORDER BY a.created_at DESC LIMIT 100`);
-  return result.rows;
+    ORDER BY a.created_at DESC LIMIT 100`), db().query(`SELECT e.id,e.strategy_id,e.action,e.limits,e.paused,e.created_at,s.name AS strategy_name
+    FROM strategy_events e JOIN strategies s ON s.id=e.strategy_id
+    ORDER BY e.created_at DESC LIMIT 100`)]);
+  return [...proposals.rows.map(row => ({...row,event_type:"proposal"})),...changes.rows.map(row => ({...row,event_type:"rules"}))]
+    .sort((a,b) => new Date(b.created_at).getTime()-new Date(a.created_at).getTime()).slice(0,100);
+}
+
+export async function updateStrategy(userId: string, strategyId: string, requested: {limits?: HardLimits; paused?: boolean}) {
+  await initializeDatabase();
+  const client = await db().connect();
+  try {
+    await client.query("BEGIN");
+    const found = await client.query("SELECT * FROM strategies WHERE id=$1 FOR UPDATE",[strategyId]);
+    if (!found.rowCount || found.rows[0].owner_id !== userId) throw new Error("Strategy not found.");
+    const strategy = found.rows[0] as StrategyRow;
+    const limits = requested.limits ?? strategy.limits;
+    for (const key of ["maxPositionNotionalUsd","dailyLossLimitUsd","maxTotalExposureUsd","maxOpenPositions"] as const) {
+      if (limits[key] > strategy.limits[key]) throw new Error("Published limits can only be tightened.");
+    }
+    const paused = requested.paused ?? strategy.paused;
+    const action = requested.limits ? "Limits tightened" : paused ? "Strategy paused" : "Strategy resumed";
+    await client.query("UPDATE strategies SET limits=$2,paused=$3 WHERE id=$1",[strategyId,JSON.stringify(limits),paused]);
+    await client.query("INSERT INTO strategy_events(id,strategy_id,actor_id,action,limits,paused) VALUES($1,$2,$3,$4,$5,$6)",
+      [randomUUID(),strategyId,userId,action,JSON.stringify(limits),paused]);
+    await client.query("COMMIT");
+    return {limits,paused};
+  } catch(error) { await client.query("ROLLBACK"); throw error; }
+  finally { client.release(); }
 }
 
 export async function followStrategy(userId: string, strategyId: string) {

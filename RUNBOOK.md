@@ -2,7 +2,7 @@
 
 ## What works
 
-Users can create an account, publish a strategy with public hard limits, paper-follow it, and submit proposals. Each proposal uses the latest Strike production market price. The checker evaluates the owner and every follower independently before a paper position is opened. Allowed and blocked decisions are stored in Postgres. The discovery board calculates paper returns from open positions and current Strike prices. No sample strategy or performance is seeded.
+Users can create an account, publish a strategy with public hard limits, paper-follow it, and submit proposals. Each proposal uses the latest Strike production market price. The checker evaluates the owner and every follower independently before a paper position is opened. Allowed and blocked decisions are stored in Postgres. Owners can pause immediately or tighten limits; these changes are recorded publicly. The discovery board calculates paper returns from open positions and current Strike prices. No sample strategy or performance is seeded.
 
 ## Required services
 
