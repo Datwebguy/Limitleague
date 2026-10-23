@@ -32,3 +32,9 @@ export function proposeTrade(proposal: TradeProposal) {
   });
   return { strategy: strategy.id, decision };
 }
+
+export function listAuditEntries() {
+  return [...strategies.values()]
+    .flatMap((strategy) => strategy.audit.map((entry) => ({ strategyId: strategy.id, strategyName: strategy.name, ...entry })))
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
