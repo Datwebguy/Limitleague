@@ -30,6 +30,7 @@ export async function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS paper_positions (
       user_id uuid NOT NULL REFERENCES users(id), strategy_id uuid NOT NULL REFERENCES strategies(id),
       market text NOT NULL, side text NOT NULL, size numeric NOT NULL, entry_price numeric NOT NULL,
+      opened_at timestamptz NOT NULL DEFAULT now(),
       PRIMARY KEY(user_id,strategy_id,market,side)
     );
     CREATE TABLE IF NOT EXISTS paper_accounts (
@@ -76,6 +77,7 @@ export async function initializeDatabase() {
     ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS portfolio_snapshot jsonb;
     ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS decision_snapshot jsonb;
     ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS event_hash text;
+    ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS opened_at timestamptz NOT NULL DEFAULT now();
   `).then(() => undefined);
   return schemaReady;
 }

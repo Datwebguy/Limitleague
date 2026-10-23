@@ -19,8 +19,10 @@
     <circle cx="1015" cy="166" r="155"/>
   </g>
   <path d="M870 167h34l21-25 30 43 23-20 24 16 31-55 30 34h81" fill="none" stroke="#9af5b4" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" opacity=".85"/>
-  <rect x="56" y="60" width="52" height="52" rx="11" fill="#9af5b4"/>
-  <text x="72" y="97" fill="#092416" font-family="Arial,sans-serif" font-size="34" font-weight="800">L</text>
+  <rect x="56" y="60" width="52" height="52" rx="13" fill="#0d1511" stroke="#4a8266" stroke-width="3"/>
+  <path d="M68 70v30h18" fill="none" stroke="#62ffc0" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M80 75v18h18" fill="none" stroke="#f3f8f5" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="98" cy="93" r="3.5" fill="#31ef9c"/>
   <text x="124" y="94" fill="#9af5b4" font-family="Arial,sans-serif" font-size="16" font-weight="700" letter-spacing="3">STRIKE HACKATHON</text>
   <text x="54" y="193" fill="#f0f9f1" font-family="Arial,sans-serif" font-size="74" font-weight="800" letter-spacing="-4">Limit<tspan fill="#9af5b4">League</tspan></text>
   <text x="58" y="244" fill="#afcbb5" font-family="Arial,sans-serif" font-size="22">Publish the rules. Prove the discipline. Earn the rank.</text>

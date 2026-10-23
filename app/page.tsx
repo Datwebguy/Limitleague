@@ -73,6 +73,43 @@ type Portfolio = {
   ledger: Array<{ id: string; event_type: string; amount: number; balance_after: number; description: string; created_at: string }>;
   priceSource: string;
 };
+type StrikeAccount = {
+  account_id: string; blockchain: string; blockchain_address: string | null;
+  wallet_balance: string; available_balance: string; unrealized_pnl: string;
+  margin_balance: string;
+};
+type StrikePosition = { symbol: string; size: string; entry_price: string; upnl: string; leverage: number; margin_mode: string };
+
+const hexBytes = (value: string) => {
+  const pairs = value.match(/.{1,2}/g);
+  if (!pairs) throw new Error("Invalid key format.");
+  return new Uint8Array(pairs.map((pair) => Number.parseInt(pair, 16)));
+};
+const bytesHex = (value: ArrayBuffer) =>
+  Array.from(new Uint8Array(value), (byte) => byte.toString(16).padStart(2, "0")).join("");
+
+async function strikeHeaders(publicKey: string, privateKey: string, path: string) {
+  const normalizedPublic = publicKey.trim().toLowerCase();
+  const normalizedPrivate = privateKey.trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(normalizedPublic) || !/^(?:[0-9a-f]{64}|[0-9a-f]{128})$/.test(normalizedPrivate))
+    throw new Error("Enter the hexadecimal public and private keys from your Strike API wallet.");
+  const prefix = hexBytes("302e020100300506032b657004220420");
+  const seed = hexBytes(normalizedPrivate.slice(0, 64));
+  const pkcs8 = new Uint8Array(prefix.length + seed.length);
+  pkcs8.set(prefix); pkcs8.set(seed, prefix.length);
+  const signingKey = await crypto.subtle.importKey("pkcs8", pkcs8, { name: "Ed25519" }, false, ["sign"]);
+  const timestamp = Math.floor(Date.now() / 1000);
+  const nonce = crypto.randomUUID();
+  const emptyHash = bytesHex(await crypto.subtle.digest("SHA-256", new Uint8Array()));
+  const message = `GET:${path}:${timestamp}:${nonce}:${emptyHash}`;
+  const signature = bytesHex(await crypto.subtle.sign("Ed25519", signingKey, new TextEncoder().encode(message)));
+  return {
+    "X-API-Wallet-Public-Key": normalizedPublic,
+    "X-API-Wallet-Signature": signature,
+    "X-API-Wallet-Timestamp": String(timestamp),
+    "X-API-Wallet-Nonce": nonce,
+  };
+}
 
 const money = (value: number, digits = 0) =>
   new Intl.NumberFormat("en-US", {
@@ -140,6 +177,10 @@ export default function Home() {
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [markets, setMarkets] = useState<Market[]>([]);
   const [selectedAudit, setSelectedAudit] = useState<Audit | null>(null);
+  const [strikeOpen, setStrikeOpen] = useState(false);
+  const [strikeAccount, setStrikeAccount] = useState<StrikeAccount | null>(null);
+  const [strikePositions, setStrikePositions] = useState<StrikePosition[]>([]);
+  const [strikeKeys, setStrikeKeys] = useState({ publicKey: "", privateKey: "" });
   const [selected, setSelected] = useState<Strategy | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -390,6 +431,29 @@ export default function Home() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function connectStrike(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true); setMessage("");
+    try {
+      const base = "https://api.strikefinance.org";
+      const [accountPath, positionsPath] = ["/v2/account", "/v2/positions"];
+      const [accountResponse, positionsResponse] = await Promise.all([
+        fetch(`${base}${accountPath}`, { headers: await strikeHeaders(strikeKeys.publicKey, strikeKeys.privateKey, accountPath) }),
+        fetch(`${base}${positionsPath}`, { headers: await strikeHeaders(strikeKeys.publicKey, strikeKeys.privateKey, positionsPath) }),
+      ]);
+      if (!accountResponse.ok || !positionsResponse.ok) throw new Error("Strike rejected this API wallet. Check the keys and try again.");
+      const accountData = await accountResponse.json();
+      const positionData = await positionsResponse.json();
+      setStrikeAccount(accountData);
+      setStrikePositions(positionData.positions ?? []);
+      setStrikeKeys({ publicKey: "", privateKey: "" });
+      setStrikeOpen(false);
+      setMessage("Strike account connected for this browser session.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not connect Strike account.");
+    } finally { setBusy(false); }
   }
 
   function openAudit(item: Audit) {
@@ -753,8 +817,26 @@ export default function Home() {
                   Every browser receives one persisted {portfolio ? money(portfolio.startingBalanceUsd, 0) : "funded"} pUSD allocation. It is virtual trading credit; fills and marks come from Strike Finance live market data.
                 </p>
               </div>
-              <span className="source-chip"><i /> Strike marks live</span>
+              <div className="account-head-actions">
+                <span className="source-chip"><i /> Strike marks live</span>
+                <button className={strikeAccount ? "secondary connected" : "primary"} onClick={() => setStrikeOpen(true)}>
+                  {strikeAccount ? "Strike connected" : "Connect Strike"}
+                </button>
+              </div>
             </div>
+            {strikeAccount && (
+              <section className="strike-account panel">
+                <div className="strike-account-title">
+                  <span className="kicker">STRIKE MAINNET ACCOUNT</span>
+                  <h2>{strikeAccount.blockchain} · {strikeAccount.blockchain_address ? `${strikeAccount.blockchain_address.slice(0, 8)}…${strikeAccount.blockchain_address.slice(-6)}` : strikeAccount.account_id}</h2>
+                  <small>Authenticated directly in this browser with a trade-only API wallet.</small>
+                </div>
+                <div><span>Wallet balance</span><b>{money(Number(strikeAccount.wallet_balance), 2)}</b></div>
+                <div><span>Available</span><b>{money(Number(strikeAccount.available_balance), 2)}</b></div>
+                <div><span>Unrealized PnL</span><b className={Number(strikeAccount.unrealized_pnl) < 0 ? "negative" : "positive"}>{money(Number(strikeAccount.unrealized_pnl), 2)}</b></div>
+                <div><span>Open positions</span><b>{strikePositions.length}</b></div>
+              </section>
+            )}
             {portfolio && (
               <>
                 <section className="account-balance panel">
@@ -1033,6 +1115,24 @@ export default function Home() {
           </button>
         ))}
       </nav>
+
+      {strikeOpen && (
+        <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && setStrikeOpen(false)}>
+          <section className="drawer connect-drawer" role="dialog" aria-modal="true" aria-label="Connect Strike account">
+            <button className="drawer-close" onClick={() => setStrikeOpen(false)} aria-label="Close Strike connection"><Icon name="close" /></button>
+            <div className="drawer-top"><span className="status-badge"><i /> STRIKE MAINNET</span></div>
+            <h2>Connect a Strike API wallet</h2>
+            <p className="drawer-description">Create an API wallet in Strike, then connect it for this browser session. Strike API wallets can trade and read your portfolio, but cannot withdraw funds. The keys remain in memory and are cleared after verification.</p>
+            <a className="strike-key-link" href="https://app.strikefinance.org/api-keys" target="_blank" rel="noreferrer">Create API wallet on Strike <Icon name="arrow" /></a>
+            <form className="connect-form" onSubmit={connectStrike}>
+              <label>API wallet public key<input required autoComplete="off" spellCheck={false} value={strikeKeys.publicKey} onChange={(event) => setStrikeKeys({ ...strikeKeys, publicKey: event.target.value })} placeholder="64-character public key" /></label>
+              <label>API wallet private key<input required type="password" autoComplete="off" spellCheck={false} value={strikeKeys.privateKey} onChange={(event) => setStrikeKeys({ ...strikeKeys, privateKey: event.target.value })} placeholder="Private signing key" /></label>
+              <div className="key-safety"><Icon name="shield" /><span><strong>Browser-only signing</strong><small>Your private key is used locally to sign the two Strike requests and is not sent to LimitLeague or saved.</small></span></div>
+              <button className="primary wide" disabled={busy}>{busy ? "Connecting…" : "Verify and connect"}<Icon name="arrow" /></button>
+            </form>
+          </section>
+        </div>
+      )}
 
       {selectedAudit && (
         <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && closeAudit()}>

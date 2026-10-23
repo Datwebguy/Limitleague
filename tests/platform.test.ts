@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { db, initializeDatabase } from "../lib/db";
+import { ensurePaperAccount } from "../lib/auth";
 import { createStrategy, followStrategy, listAudit, proposeTrade, updateStrategy } from "../lib/platform";
 
 test.after(async () => { if (process.env.DATABASE_URL) await db().end(); });
@@ -12,6 +13,8 @@ test("a real paper proposal is checked, copied to followers, and audited", { ski
   const follower = randomUUID();
   await db().query("INSERT INTO users(id,email,password_hash) VALUES($1,$2,'test'),($3,$4,'test')",
     [owner, owner+"@example.test", follower, follower+"@example.test"]);
+  await ensurePaperAccount(owner);
+  await ensurePaperAccount(follower);
   const strategy = await createStrategy(owner, "Integration Strategy", "Test", {
     maxPositionNotionalUsd: 200,
     dailyLossLimitUsd: 50,

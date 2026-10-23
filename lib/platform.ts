@@ -28,9 +28,15 @@ export async function listStrategies(userId?: string) {
   const strategies = result.rows as Array<
     StrategyRow & { followers: number; audit_count: number; following: boolean }
   >;
-  const positions = await db()
-    .query(`SELECT p.strategy_id,p.market,p.side,p.size::float,p.entry_price::float
-    FROM paper_positions p JOIN strategies s ON s.id=p.strategy_id AND s.owner_id=p.user_id`);
+  const [positions, realized] = await Promise.all([
+    db().query(`SELECT p.strategy_id,p.market,p.side,p.size::float,p.entry_price::float
+      FROM paper_positions p JOIN strategies s ON s.id=p.strategy_id AND s.owner_id=p.user_id`),
+    db().query(`SELECT reference_id AS strategy_id,COALESCE(sum(amount),0)::float AS pnl
+      FROM paper_ledger WHERE event_type='realized_pnl' AND reference_id IS NOT NULL GROUP BY reference_id`),
+  ]);
+  const realizedByStrategy = new Map(
+    realized.rows.map((row) => [row.strategy_id as string, Number(row.pnl)]),
+  );
   const prices = new Map<string, number>();
   await Promise.all(
     [...new Set(positions.rows.map((row) => row.market as string))].map(
@@ -42,7 +48,7 @@ export async function listStrategies(userId?: string) {
       const ownPositions = positions.rows.filter(
         (row) => row.strategy_id === strategy.id,
       );
-      const pnlUsd = ownPositions.reduce(
+      const pnlUsd = (realizedByStrategy.get(strategy.id) ?? 0) + ownPositions.reduce(
         (sum, row) =>
           sum +
           (row.side === "long" ? 1 : -1) *
@@ -50,7 +56,8 @@ export async function listStrategies(userId?: string) {
             (prices.get(row.market)! - row.entry_price),
         0,
       );
-      const returnPct = ownPositions.length
+      const hasTrackRecord = ownPositions.length > 0 || strategy.audit_count > 0;
+      const returnPct = hasTrackRecord
         ? (100 * pnlUsd) / strategy.limits.maxTotalExposureUsd
         : null;
       const score =
@@ -192,7 +199,7 @@ async function paperState(
   price: number,
 ) {
   const positions = await client.query(
-    "SELECT market,side,size::float,entry_price::float FROM paper_positions WHERE user_id=$1 AND strategy_id=$2",
+    "SELECT market,side,size::float,entry_price::float,opened_at FROM paper_positions WHERE user_id=$1 AND strategy_id=$2",
     [userId, strategyId],
   );
   const markets = [
@@ -216,14 +223,14 @@ async function paperState(
   );
   const realized = await client.query(
     `SELECT COALESCE(sum(amount),0)::float AS pnl FROM paper_ledger
-     WHERE user_id=$1 AND event_type='realized_pnl' AND created_at >= $2`,
-    [userId, new Date(dayStart)],
+     WHERE user_id=$1 AND reference_id=$2 AND event_type='realized_pnl' AND created_at >= $3`,
+    [userId, strategyId, new Date(dayStart)],
   );
   const pnl = positions.rows.reduce((sum, row) => {
     const mark = prices.get(row.market);
     const dayOpen = dayOpens.get(row.market);
     if (!mark || !dayOpen) throw new Error("Paper portfolio price is incomplete.");
-    const reference = Math.max(0, row.entry_price) || dayOpen;
+    const reference = new Date(row.opened_at).getTime() < dayStart ? dayOpen : row.entry_price;
     return sum + (row.side === "long" ? 1 : -1) * row.size * (mark - reference);
   }, Number(realized.rows[0]?.pnl ?? 0));
   const portfolio: PortfolioState = {
