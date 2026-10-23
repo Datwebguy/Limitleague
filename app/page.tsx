@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 type Limits = {
@@ -47,6 +47,8 @@ type Audit = {
   };
   decision_snapshot?: Decision;
   event_hash?: string;
+  mode?: "paper" | "live";
+  execution_snapshot?: { accepted: boolean; strikeResponse?: Record<string, unknown>; recordedAt: string };
   created_at: string;
 };
 type User = { id: string };
@@ -62,7 +64,7 @@ type Decision = {
     dailyLossUsd: number;
   };
 };
-type Market = { symbol: string; name: string; markPrice: number; fundingRate: number; minNotionalUsd: number };
+type Market = { symbol: string; name: string; markPrice: number; fundingRate: number; minNotionalUsd: number; orderStepSize: number };
 type Position = {
   strategy_id: string; strategy_name: string; market: string; side: "long" | "short";
   size: number; entry_price: number; markPrice: number; notionalUsd: number; unrealizedPnlUsd: number;
@@ -88,7 +90,7 @@ const hexBytes = (value: string) => {
 const bytesHex = (value: ArrayBuffer) =>
   Array.from(new Uint8Array(value), (byte) => byte.toString(16).padStart(2, "0")).join("");
 
-async function strikeHeaders(publicKey: string, privateKey: string, path: string) {
+async function importStrikeKey(publicKey: string, privateKey: string) {
   const normalizedPublic = publicKey.trim().toLowerCase();
   const normalizedPrivate = privateKey.trim().toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(normalizedPublic) || !/^(?:[0-9a-f]{64}|[0-9a-f]{128})$/.test(normalizedPrivate))
@@ -98,13 +100,17 @@ async function strikeHeaders(publicKey: string, privateKey: string, path: string
   const pkcs8 = new Uint8Array(prefix.length + seed.length);
   pkcs8.set(prefix); pkcs8.set(seed, prefix.length);
   const signingKey = await crypto.subtle.importKey("pkcs8", pkcs8, { name: "Ed25519" }, false, ["sign"]);
+  return { publicKey: normalizedPublic, signingKey };
+}
+
+async function strikeHeaders(publicKey: string, signingKey: CryptoKey, method: string, path: string, body = "") {
   const timestamp = Math.floor(Date.now() / 1000);
   const nonce = crypto.randomUUID();
-  const emptyHash = bytesHex(await crypto.subtle.digest("SHA-256", new Uint8Array()));
-  const message = `GET:${path}:${timestamp}:${nonce}:${emptyHash}`;
+  const bodyHash = bytesHex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body)));
+  const message = `${method}:${path}:${timestamp}:${nonce}:${bodyHash}`;
   const signature = bytesHex(await crypto.subtle.sign("Ed25519", signingKey, new TextEncoder().encode(message)));
   return {
-    "X-API-Wallet-Public-Key": normalizedPublic,
+    "X-API-Wallet-Public-Key": publicKey,
     "X-API-Wallet-Signature": signature,
     "X-API-Wallet-Timestamp": String(timestamp),
     "X-API-Wallet-Nonce": nonce,
@@ -181,6 +187,9 @@ export default function Home() {
   const [strikeAccount, setStrikeAccount] = useState<StrikeAccount | null>(null);
   const [strikePositions, setStrikePositions] = useState<StrikePosition[]>([]);
   const [strikeKeys, setStrikeKeys] = useState({ publicKey: "", privateKey: "" });
+  const strikeSigningKey = useRef<CryptoKey | null>(null);
+  const strikePublicKey = useRef("");
+  const [executionMode, setExecutionMode] = useState<"paper" | "live">("paper");
   const [selected, setSelected] = useState<Strategy | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -342,14 +351,52 @@ export default function Home() {
     setResult(null);
     setMessage("");
     try {
-      const response = await post("/api/proposals", {
-        strategyId: selected.id,
-        market: proposal.market.toUpperCase(),
-        side: proposal.side,
-        notionalUsd: Number(proposal.notionalUsd),
-        reason: proposal.reason,
-      });
-      setResult({ ...response.ownerDecision.decision, price: response.price });
+      const payload = {
+        strategyId: selected.id, market: proposal.market.toUpperCase(),
+        side: proposal.side, notionalUsd: Number(proposal.notionalUsd), reason: proposal.reason,
+      };
+      if (executionMode === "live") {
+        if (!strikeAccount || !strikeSigningKey.current) throw new Error("Connect your Strike API wallet from Account before placing a live order.");
+        const authHeaders = await strikeHeaders(strikePublicKey.current, strikeSigningKey.current, "GET", "/v2/account");
+        const checked = await post("/api/live-proposals", {
+          ...payload,
+          strikeAccountId: strikeAccount.account_id,
+          strikeAuth: {
+            publicKey: authHeaders["X-API-Wallet-Public-Key"],
+            signature: authHeaders["X-API-Wallet-Signature"],
+            timestamp: authHeaders["X-API-Wallet-Timestamp"],
+            nonce: authHeaders["X-API-Wallet-Nonce"],
+          },
+        });
+        setResult({ ...checked.decision, price: checked.price });
+        if (checked.decision.allowed) {
+          if (!window.confirm(`Place a live ${payload.side.toUpperCase()} ${payload.market} order for ${money(payload.notionalUsd)} on Strike? This order uses real funds.`)) {
+            setMessage("Live order canceled before it reached Strike.");
+            return;
+          }
+          const market = markets.find((item) => item.symbol === payload.market);
+          if (!market) throw new Error("Strike market configuration is unavailable.");
+          const rawSize = payload.notionalUsd / checked.price;
+          const step = market.orderStepSize;
+          if (!Number.isFinite(step) || step <= 0) throw new Error("Strike order sizing is unavailable for this market.");
+          const size = (Math.floor((rawSize + Number.EPSILON) / step) * step).toFixed(8).replace(/0+$/, "").replace(/\.$/, "");
+          if (!Number(size) || Number(size) * checked.price < market.minNotionalUsd) throw new Error("Order is below Strike's minimum size.");
+          const orderBody = JSON.stringify({ symbol: payload.market, side: payload.side === "long" ? "buy" : "sell", type: "market", size, client_order_id: `limitleague-${crypto.randomUUID()}` });
+          const path = "/v2/order";
+          const orderResponse = await fetch(`https://api.strikefinance.org${path}`, {
+            method: "POST",
+            headers: { ...(await strikeHeaders(strikePublicKey.current, strikeSigningKey.current, "POST", path, orderBody)), "Content-Type": "application/json" },
+            body: orderBody,
+          });
+          const orderResult = await orderResponse.json();
+          await post("/api/live-proposals/result", { auditId: checked.auditId, accepted: orderResponse.ok, strikeResponse: orderResult });
+          if (!orderResponse.ok) throw new Error(orderResult.error ?? orderResult.msg ?? "Strike rejected the live order.");
+          setMessage(`Live ${payload.market} order accepted by Strike. Audit ${checked.auditId.slice(0, 8)} recorded.`);
+        }
+      } else {
+        const response = await post("/api/proposals", payload);
+        setResult({ ...response.ownerDecision.decision, price: response.price });
+      }
       await refresh();
     } catch (error) {
       setMessage((error as Error).message);
@@ -439,21 +486,34 @@ export default function Home() {
     try {
       const base = "https://api.strikefinance.org";
       const [accountPath, positionsPath] = ["/v2/account", "/v2/positions"];
+      const imported = await importStrikeKey(strikeKeys.publicKey, strikeKeys.privateKey);
       const [accountResponse, positionsResponse] = await Promise.all([
-        fetch(`${base}${accountPath}`, { headers: await strikeHeaders(strikeKeys.publicKey, strikeKeys.privateKey, accountPath) }),
-        fetch(`${base}${positionsPath}`, { headers: await strikeHeaders(strikeKeys.publicKey, strikeKeys.privateKey, positionsPath) }),
+        fetch(`${base}${accountPath}`, { headers: await strikeHeaders(imported.publicKey, imported.signingKey, "GET", accountPath) }),
+        fetch(`${base}${positionsPath}`, { headers: await strikeHeaders(imported.publicKey, imported.signingKey, "GET", positionsPath) }),
       ]);
       if (!accountResponse.ok || !positionsResponse.ok) throw new Error("Strike rejected this API wallet. Check the keys and try again.");
       const accountData = await accountResponse.json();
       const positionData = await positionsResponse.json();
       setStrikeAccount(accountData);
       setStrikePositions(positionData.positions ?? []);
+      strikeSigningKey.current = imported.signingKey;
+      strikePublicKey.current = imported.publicKey;
       setStrikeKeys({ publicKey: "", privateKey: "" });
       setStrikeOpen(false);
       setMessage("Strike account connected for this browser session.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not connect Strike account.");
     } finally { setBusy(false); }
+  }
+
+  function disconnectStrike() {
+    strikeSigningKey.current = null;
+    strikePublicKey.current = "";
+    setStrikeAccount(null);
+    setStrikePositions([]);
+    setStrikeKeys({ publicKey: "", privateKey: "" });
+    setExecutionMode("paper");
+    setMessage("Strike account disconnected from this browser session.");
   }
 
   function openAudit(item: Audit) {
@@ -819,8 +879,8 @@ export default function Home() {
               </div>
               <div className="account-head-actions">
                 <span className="source-chip"><i /> Strike marks live</span>
-                <button className={strikeAccount ? "secondary connected" : "primary"} onClick={() => setStrikeOpen(true)}>
-                  {strikeAccount ? "Strike connected" : "Connect Strike"}
+                <button className={strikeAccount ? "secondary connected" : "primary"} onClick={() => strikeAccount ? disconnectStrike() : setStrikeOpen(true)}>
+                  {strikeAccount ? "Disconnect Strike" : "Connect Strike"}
                 </button>
               </div>
             </div>
@@ -1122,12 +1182,12 @@ export default function Home() {
             <button className="drawer-close" onClick={() => setStrikeOpen(false)} aria-label="Close Strike connection"><Icon name="close" /></button>
             <div className="drawer-top"><span className="status-badge"><i /> STRIKE MAINNET</span></div>
             <h2>Connect a Strike API wallet</h2>
-            <p className="drawer-description">Create an API wallet in Strike, then connect it for this browser session. Strike API wallets can trade and read your portfolio, but cannot withdraw funds. The keys remain in memory and are cleared after verification.</p>
+            <p className="drawer-description">Create an API wallet in Strike, then connect it for this browser session. Strike API wallets can trade and read your portfolio, but cannot withdraw funds. Your raw private key is cleared after connection.</p>
             <a className="strike-key-link" href="https://app.strikefinance.org/api-keys" target="_blank" rel="noreferrer">Create API wallet on Strike <Icon name="arrow" /></a>
             <form className="connect-form" onSubmit={connectStrike}>
               <label>API wallet public key<input required autoComplete="off" spellCheck={false} value={strikeKeys.publicKey} onChange={(event) => setStrikeKeys({ ...strikeKeys, publicKey: event.target.value })} placeholder="64-character public key" /></label>
               <label>API wallet private key<input required type="password" autoComplete="off" spellCheck={false} value={strikeKeys.privateKey} onChange={(event) => setStrikeKeys({ ...strikeKeys, privateKey: event.target.value })} placeholder="Private signing key" /></label>
-              <div className="key-safety"><Icon name="shield" /><span><strong>Browser-only signing</strong><small>Your private key is used locally to sign the two Strike requests and is not sent to LimitLeague or saved.</small></span></div>
+              <div className="key-safety"><Icon name="shield" /><span><strong>Browser-only signing</strong><small>A non-exportable signing key stays in this tab until refresh or disconnect. The raw private key is never sent to LimitLeague or saved.</small></span></div>
               <button className="primary wide" disabled={busy}>{busy ? "Connecting…" : "Verify and connect"}<Icon name="arrow" /></button>
             </form>
           </section>
@@ -1164,8 +1224,14 @@ export default function Home() {
             <div className="proof-source">
               <span>Price source</span><b>Strike Finance live market API</b>
               <span>Recorded</span><b>{new Date(selectedAudit.created_at).toLocaleString()}</b>
-              <span>Mode</span><b>Persisted paper account</b>
+              <span>Mode</span><b>{selectedAudit.mode === "live" ? "Strike mainnet" : "Persisted paper account"}</b>
             </div>
+            {selectedAudit.mode === "live" && selectedAudit.execution_snapshot && (
+              <div className={`execution-proof ${selectedAudit.execution_snapshot.accepted ? "accepted" : "rejected"}`}>
+                <strong>Strike execution {selectedAudit.execution_snapshot.accepted ? "accepted" : "rejected"}</strong>
+                <span>{String(selectedAudit.execution_snapshot.strikeResponse?.order_id ?? selectedAudit.execution_snapshot.strikeResponse?.ID ?? "Recorded by Strike")}</span>
+              </div>
+            )}
             {selectedAudit.reasons && selectedAudit.reasons.length > 0 && <div className="block-reason"><strong>Block reason</strong><p>{selectedAudit.reasons.join(" ")}</p></div>}
             <button className="primary wide" onClick={() => {
               void navigator.clipboard.writeText(`${window.location.origin}/?audit=${selectedAudit.id}`);
@@ -1280,9 +1346,13 @@ export default function Home() {
                   <div className="form-title">
                     <span>ORDER</span>
                     <div>
-                      <h3>Submit a paper order</h3>
-                      <p>Strike prices it. The checker decides.</p>
+                      <h3>{executionMode === "live" ? "Place a guarded live order" : "Submit a paper order"}</h3>
+                      <p>{executionMode === "live" ? "Current Strike account state is checked before signing." : "Strike prices it. The checker decides."}</p>
                     </div>
+                  </div>
+                  <div className="execution-switch" aria-label="Execution mode">
+                    <button type="button" className={executionMode === "paper" ? "active" : ""} onClick={() => setExecutionMode("paper")}><span>Paper</span><small>10,000 pUSD workspace</small></button>
+                    <button type="button" className={executionMode === "live" ? "active live" : ""} onClick={() => strikeAccount ? setExecutionMode("live") : setStrikeOpen(true)}><span>Strike live</span><small>{strikeAccount ? "Connected mainnet account" : "Connect API wallet first"}</small></button>
                   </div>
                   <div className="form-grid compact">
                     <label>
@@ -1343,7 +1413,7 @@ export default function Home() {
                     className="primary wide"
                     disabled={busy || selected.paused}
                   >
-                    {selected.paused ? "Strategy paused" : "Check proposal"}
+                    {selected.paused ? "Strategy paused" : executionMode === "live" ? "Check limits and place live" : "Check paper proposal"}
                     <Icon name="arrow" />
                   </button>
                   {result && (

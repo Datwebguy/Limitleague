@@ -2,7 +2,7 @@ import type { PoolClient } from "pg";
 import { createHash, randomUUID } from "node:crypto";
 import { db, initializeDatabase } from "./db";
 import { checkLimits } from "./limit-checker";
-import { getStrikeDayOpen, getStrikePrice } from "./strike/client";
+import { getStrikeDayOpen, getStrikePrice, getStrikePublicAccount, getStrikePublicFills, getStrikePublicPositions } from "./strike/client";
 import type { HardLimits, PortfolioState, TradeProposal } from "./types";
 
 export type StrategyRow = {
@@ -90,7 +90,7 @@ export async function listAudit() {
     db()
       .query(`SELECT a.id,a.strategy_id,a.market,a.side,a.reason,a.notional_usd::float AS notional_usd,
     a.price::float AS price,a.allowed,a.reasons,a.mode,a.event_kind,a.limits_snapshot,
-    a.portfolio_snapshot,a.decision_snapshot,a.event_hash,a.created_at,s.name AS strategy_name
+    a.portfolio_snapshot,a.decision_snapshot,a.execution_snapshot,a.event_hash,a.created_at,s.name AS strategy_name
     FROM audit_events a JOIN strategies s ON s.id=a.strategy_id WHERE a.user_id=s.owner_id
     ORDER BY a.created_at DESC LIMIT 100`),
     db()
@@ -114,7 +114,7 @@ export async function getAuditEvent(id: string) {
   const result = await db().query(
     `SELECT a.id,a.strategy_id,a.market,a.side,a.reason,a.notional_usd::float AS notional_usd,
      a.price::float AS price,a.allowed,a.reasons,a.mode,a.event_kind,a.limits_snapshot,
-     a.portfolio_snapshot,a.decision_snapshot,a.event_hash,a.created_at,s.name AS strategy_name
+     a.portfolio_snapshot,a.decision_snapshot,a.execution_snapshot,a.event_hash,a.created_at,s.name AS strategy_name
      FROM audit_events a JOIN strategies s ON s.id=a.strategy_id WHERE a.id=$1`,
     [id],
   );
@@ -463,4 +463,125 @@ export async function proposeTrade(userId: string, proposal: TradeProposal) {
   } finally {
     client.release();
   }
+}
+
+export async function checkLiveTrade(
+  userId: string,
+  proposal: TradeProposal,
+  strikeAccountId: string,
+) {
+  await initializeDatabase();
+  const dayStart = new Date().setUTCHours(0, 0, 0, 0);
+  const [price, account, positions, fills] = await Promise.all([
+    getStrikePrice(proposal.market),
+    getStrikePublicAccount(strikeAccountId),
+    getStrikePublicPositions(strikeAccountId),
+    getStrikePublicFills(strikeAccountId, dayStart),
+  ]);
+  if (account.account_id !== strikeAccountId) throw new Error("Strike account verification failed.");
+
+  const symbols = [...new Set(positions.map((position) => position.symbol))];
+  const marks = new Map<string, number>();
+  await Promise.all(symbols.map(async (symbol) => marks.set(symbol, symbol === proposal.market ? price : await getStrikePrice(symbol))));
+  const dayOpens = new Map<string, number>();
+  await Promise.all(
+    positions
+      .filter((position) => Number(position.create_timestamp) < dayStart)
+      .map(async (position) => dayOpens.set(position.symbol, await getStrikeDayOpen(position.symbol))),
+  );
+
+  const openPositions = positions.flatMap((position) => {
+    const signedSize = Number(position.size);
+    const mark = marks.get(position.symbol);
+    if (!Number.isFinite(signedSize) || !mark || signedSize === 0) return [];
+    return [{
+      market: position.symbol,
+      side: (signedSize > 0 ? "long" : "short") as "long" | "short",
+      notionalUsd: Math.abs(signedSize) * mark,
+    }];
+  });
+  const realizedPnl = fills.reduce((sum, fill) => {
+    const pnl = Number(fill.realized_pnl);
+    const fee = Math.abs(Number(fill.fee));
+    return sum + (Number.isFinite(pnl) ? pnl : 0) - (Number.isFinite(fee) ? fee : 0);
+  }, 0);
+  const dailyUnrealized = positions.reduce((sum, position) => {
+    const signedSize = Number(position.size);
+    const mark = marks.get(position.symbol);
+    const entry = Number(position.entry_price);
+    const reference = Number(position.create_timestamp) < dayStart ? dayOpens.get(position.symbol) : entry;
+    if (!Number.isFinite(signedSize) || !mark || !reference) throw new Error("Strike portfolio state is incomplete.");
+    return sum + signedSize * (mark - reference);
+  }, 0);
+  const portfolio: PortfolioState = { openPositions, dailyPnlUsd: realizedPnl + dailyUnrealized };
+
+  const client = await db().connect();
+  try {
+    await client.query("BEGIN");
+    const found = await client.query("SELECT * FROM strategies WHERE id=$1 FOR UPDATE", [proposal.strategyId]);
+    if (!found.rowCount || found.rows[0].owner_id !== userId) throw new Error("Only the strategy owner can place a live order.");
+    const strategy = found.rows[0] as StrategyRow;
+    const decision = checkLimits(proposal, strategy.limits, portfolio);
+    const availableMarginUsd = Number(account.available_balance);
+    if (!Number.isFinite(availableMarginUsd) || availableMarginUsd <= 0) {
+      decision.allowed = false;
+      decision.reasons.push("Strike account has no available margin.");
+    }
+    if (strategy.paused) {
+      decision.allowed = false;
+      decision.reasons.push("Strategy is paused.");
+    }
+    const auditId = randomUUID();
+    const portfolioSnapshot = {
+      accountId: strikeAccountId,
+      openPositions: portfolio.openPositions,
+      dailyPnlUsd: portfolio.dailyPnlUsd,
+      availableMarginUsd,
+    };
+    const proofPayload = {
+      id: auditId,
+      strategyId: strategy.id,
+      proposal,
+      strikePrice: price,
+      limits: strategy.limits,
+      portfolio: portfolioSnapshot,
+      decision,
+      mode: "live",
+    };
+    await client.query(
+      `INSERT INTO audit_events(id,strategy_id,user_id,market,side,notional_usd,price,allowed,reasons,reason,mode,
+       event_kind,limits_snapshot,portfolio_snapshot,decision_snapshot,event_hash)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'live','proposal',$11,$12,$13,$14)`,
+      [
+        auditId, strategy.id, userId, proposal.market, proposal.side, proposal.notionalUsd, price,
+        decision.allowed, JSON.stringify(decision.reasons), proposal.reason, JSON.stringify(strategy.limits),
+        JSON.stringify(portfolioSnapshot), JSON.stringify(decision), hashAudit(proofPayload),
+      ],
+    );
+    await client.query("COMMIT");
+    return { auditId, price, decision };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function recordLiveExecution(
+  userId: string,
+  auditId: string,
+  accepted: boolean,
+  strikeResponse: unknown,
+) {
+  await initializeDatabase();
+  const snapshot = { accepted, strikeResponse, recordedAt: new Date().toISOString() };
+  const result = await db().query(
+    `UPDATE audit_events SET execution_snapshot=$3
+     WHERE id=$1 AND user_id=$2 AND mode='live' AND execution_snapshot IS NULL
+     RETURNING id`,
+    [auditId, userId, JSON.stringify(snapshot)],
+  );
+  if (!result.rowCount) throw new Error("Live audit record was not found or already finalized.");
+  return snapshot;
 }

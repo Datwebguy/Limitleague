@@ -60,6 +60,7 @@ export async function initializeDatabase() {
       limits_snapshot jsonb,
       portfolio_snapshot jsonb,
       decision_snapshot jsonb,
+      execution_snapshot jsonb,
       event_hash text,
       created_at timestamptz NOT NULL DEFAULT now()
     );
@@ -76,6 +77,7 @@ export async function initializeDatabase() {
     ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS limits_snapshot jsonb;
     ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS portfolio_snapshot jsonb;
     ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS decision_snapshot jsonb;
+    ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS execution_snapshot jsonb;
     ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS event_hash text;
     ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS opened_at timestamptz NOT NULL DEFAULT now();
   `).then(() => undefined);

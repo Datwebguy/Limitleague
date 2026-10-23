@@ -1156,6 +1156,50 @@ textarea {
 .proposal-card label {
   margin-bottom: 12px;
 }
+.execution-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 16px 0;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.025);
+}
+.execution-switch button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 11px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  text-align: left;
+}
+.execution-switch button span { color: var(--text); font-weight: 700; }
+.execution-switch button small { font-size: 9px; letter-spacing: .04em; }
+.execution-switch button.active {
+  border-color: rgba(49, 239, 156, .35);
+  background: rgba(49, 239, 156, .08);
+}
+.execution-switch button.active.live {
+  border-color: rgba(110, 151, 255, .45);
+  background: rgba(110, 151, 255, .09);
+}
+.execution-proof {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 11px;
+}
+.execution-proof.accepted { border-color: rgba(49, 239, 156, .35); color: var(--green); }
+.execution-proof.rejected { border-color: rgba(255, 85, 117, .35); color: var(--red); }
 .decision-result {
   display: flex;
   gap: 12px;

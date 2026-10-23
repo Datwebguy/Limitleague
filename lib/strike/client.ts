@@ -68,6 +68,7 @@ export type StrikeMarket = {
   markPrice: number;
   fundingRate: number;
   minNotionalUsd: number;
+  orderStepSize: number;
   status: string;
 };
 
@@ -84,11 +85,82 @@ export async function getStrikeMarkets(): Promise<StrikeMarket[]> {
     markPrice: Number(market.mark_price),
     fundingRate: Number(market.funding_rate ?? 0),
     minNotionalUsd: Number(market.order_min_notional ?? 0),
+    orderStepSize: Number(market.order_market_step_size ?? market.order_step_size ?? 0),
     status: String(market.status ?? "unknown"),
   }));
   return markets
     .filter((market) => market.status === "trading" && Number.isFinite(market.markPrice))
     .sort((a, b) => a.symbol.localeCompare(b.symbol));
+}
+
+async function publicStrikeRequest(path: string, query: Record<string, string>) {
+  const url = new URL(path, baseUrl);
+  for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
+  const response = await fetch(url, { cache: "no-store" });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`Strike public account data returned HTTP ${response.status}.`);
+  return data;
+}
+
+export type StrikePublicAccount = {
+  account_id: string;
+  available_balance: string;
+  wallet_balance: string;
+  unrealized_pnl: string;
+};
+
+export type StrikePublicPosition = {
+  symbol: string;
+  size: string;
+  entry_price: string;
+  create_timestamp: number;
+};
+
+export type StrikePublicFill = {
+  realized_pnl: string;
+  fee: string;
+  timestamp: number;
+};
+
+export async function getStrikePublicAccount(accountId: string): Promise<StrikePublicAccount> {
+  return publicStrikeRequest("/v2/account", { account_id: accountId });
+}
+
+export async function getStrikePublicPositions(accountId: string): Promise<StrikePublicPosition[]> {
+  const result = await publicStrikeRequest("/v2/positions", { account_id: accountId }) as { positions?: StrikePublicPosition[] };
+  return result.positions ?? [];
+}
+
+export async function getStrikePublicFills(accountId: string, startTime: number): Promise<StrikePublicFill[]> {
+  const result = await publicStrikeRequest("/v2/history/fill", {
+    account_id: accountId,
+    startTime: String(startTime),
+    limit: "1000",
+  }) as { fills?: StrikePublicFill[] };
+  return result.fills ?? [];
+}
+
+export type StrikeAuthProof = {
+  publicKey: string;
+  signature: string;
+  timestamp: string;
+  nonce: string;
+};
+
+/** Uses a single-use browser signature to let Strike identify the connected account. */
+export async function verifyStrikeAccountAuth(proof: StrikeAuthProof): Promise<StrikePublicAccount> {
+  const response = await fetch(new URL("/v2/account", baseUrl), {
+    headers: {
+      "X-API-Wallet-Public-Key": proof.publicKey,
+      "X-API-Wallet-Signature": proof.signature,
+      "X-API-Wallet-Timestamp": proof.timestamp,
+      "X-API-Wallet-Nonce": proof.nonce,
+    },
+    cache: "no-store",
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error("Strike could not verify this API wallet session.");
+  return data as StrikePublicAccount;
 }
 
 export async function getStrikeDayOpen(symbol: string): Promise<number> {
