@@ -12,7 +12,7 @@
 
 A return tells you what happened. It does not tell you how much risk a strategy took to get there. LimitLeague puts the risk contract first: every strategy publishes hard limits, and every paper trade proposal receives an allow or block decision against those limits. The strategy's record is public, so people can inspect its discipline before following it.
 
-LimitLeague is built for the Strike Finance ecosystem and uses live Strike market prices to mark paper positions.
+LimitLeague is built for the Strike Finance ecosystem and uses live Strike mark prices for every fill and open position.
 
 ## What you can do
 
@@ -20,7 +20,9 @@ LimitLeague is built for the Strike Finance ecosystem and uses live Strike marke
 | --- | --- | --- |
 | Compare public strategies, limits, paper returns, follower counts, and decision histories. | Set caps for position size, daily loss, total exposure, and open positions. Pause immediately or tighten limits with a public record of the change. | Paper-follow a strategy. Each proposal is checked against **your own** paper portfolio under the strategy's published limits. |
 
-The public audit trail records allowed and blocked proposals with their reasons. Performance shown in the app is paper performance derived from positions and current Strike prices; a strategy with no trades shows no return.
+Every browser workspace receives a persisted 10,000 pUSD paper allocation. The account view shows equity, available buying power, open exposure, live PnL, closable positions, and its funding ledger. pUSD is virtual trading credit and has no cash value.
+
+The public audit trail records allowed and blocked proposals with the exact limits and portfolio state used by the checker. Each new decision has a SHA-256 proof ID and a shareable verification link. Performance shown in the app is paper performance derived from positions and current Strike marks; a strategy with no trades shows no return.
 
 ## How it works
 
@@ -43,9 +45,10 @@ The deterministic checker evaluates maximum position notional, total open exposu
 
 1. **Open the paper league** at [limitleague.vercel.app](https://limitleague.vercel.app). Your private paper session starts automatically.
 2. **Publish a strategy** with a name, description, and hard limits.
-3. **Submit a paper trade proposal.** LimitLeague gets the current Strike price, checks the rules, and records the decision.
-4. **Inspect the audit trail** to see allowed and blocked decisions and rule changes.
-5. **Paper-follow a strategy** to apply its published limits to your own paper portfolio.
+3. **Submit a paper trade proposal.** Choose from the live Strike market catalog; LimitLeague gets the current mark, checks the rules and buying power, then records the decision.
+4. **Manage the paper account.** Review balances and PnL, then close positions at the current Strike mark.
+5. **Verify the public audit.** Open any decision to inspect every before/after value or copy its verification link.
+6. **Paper-follow a strategy** to apply its published limits to your own paper portfolio.
 
 ## Run locally
 
@@ -72,6 +75,7 @@ Open [http://localhost:3000](http://localhost:3000). Database tables are created
 | `STRIKE_API_BASE_URL` | Strike API origin; defaults to `https://api.strikefinance.org`. |
 | `STRIKE_API_WALLET_PUBLIC_KEY` | Server-side Strike API wallet public key for authenticated Strike requests. |
 | `STRIKE_API_WALLET_PRIVATE_KEY` | Server-side signing key. Keep it in your hosting provider's secret store; never commit it. |
+| `PAPER_STARTING_BALANCE_USD` | One-time pUSD allocation for a new paper workspace; defaults to `10000`. |
 
 ## Checks
 

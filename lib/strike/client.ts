@@ -51,14 +51,44 @@ export async function submitStrikeOrder(order: { symbol: string; side: "buy" | "
 }
 
 export async function getStrikePrice(symbol: string): Promise<number> {
-  const url = new URL("/price/v2/ticker/price", baseUrl);
+  const url = new URL("/price/v2/markPrice", baseUrl);
   url.searchParams.set("symbol", symbol);
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) throw new Error("Strike price is unavailable.");
   const value = await response.json();
-  const price = Number(value.price);
+  const price = Number(value.p);
   if (!Number.isFinite(price) || price <= 0) throw new Error("Strike price is invalid.");
   return price;
+}
+
+export type StrikeMarket = {
+  symbol: string;
+  name: string;
+  baseAsset: string;
+  markPrice: number;
+  fundingRate: number;
+  minNotionalUsd: number;
+  status: string;
+};
+
+export async function getStrikeMarkets(): Promise<StrikeMarket[]> {
+  const response = await fetch(new URL("/v2/markets", baseUrl), {
+    next: { revalidate: 30 },
+  });
+  if (!response.ok) throw new Error("Strike markets are unavailable.");
+  const data = (await response.json()) as { markets?: Record<string, Record<string, unknown>> };
+  const markets = Object.values(data.markets ?? {}).map((market) => ({
+    symbol: String(market.symbol),
+    name: String(market.name ?? market.symbol),
+    baseAsset: String(market.base_asset ?? ""),
+    markPrice: Number(market.mark_price),
+    fundingRate: Number(market.funding_rate ?? 0),
+    minNotionalUsd: Number(market.order_min_notional ?? 0),
+    status: String(market.status ?? "unknown"),
+  }));
+  return markets
+    .filter((market) => market.status === "trading" && Number.isFinite(market.markPrice))
+    .sort((a, b) => a.symbol.localeCompare(b.symbol));
 }
 
 export async function getStrikeDayOpen(symbol: string): Promise<number> {

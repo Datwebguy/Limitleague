@@ -29,7 +29,7 @@ type Audit = {
   id: string;
   strategy_id: string;
   strategy_name: string;
-  event_type: "proposal" | "rules";
+  event_type: "proposal" | "rules" | "close";
   action?: string;
   paused?: boolean;
   market?: string;
@@ -38,10 +38,19 @@ type Audit = {
   price?: number;
   allowed?: boolean;
   reasons?: string[];
+  reason?: string;
+  limits_snapshot?: Limits;
+  portfolio_snapshot?: {
+    openPositions: Array<{ market: string; side: string; notionalUsd: number }>;
+    dailyPnlUsd: number;
+    availableBuyingPowerUsd: number;
+  };
+  decision_snapshot?: Decision;
+  event_hash?: string;
   created_at: string;
 };
 type User = { id: string };
-type View = "league" | "audit" | "publish";
+type View = "league" | "account" | "audit" | "publish";
 type Decision = {
   allowed: boolean;
   reasons: string[];
@@ -52,6 +61,17 @@ type Decision = {
     openPositionCount: number;
     dailyLossUsd: number;
   };
+};
+type Market = { symbol: string; name: string; markPrice: number; fundingRate: number; minNotionalUsd: number };
+type Position = {
+  strategy_id: string; strategy_name: string; market: string; side: "long" | "short";
+  size: number; entry_price: number; markPrice: number; notionalUsd: number; unrealizedPnlUsd: number;
+};
+type Portfolio = {
+  currency: string; startingBalanceUsd: number; cashBalanceUsd: number; equityUsd: number;
+  availableUsd: number; exposureUsd: number; unrealizedPnlUsd: number; positions: Position[];
+  ledger: Array<{ id: string; event_type: string; amount: number; balance_after: number; description: string; created_at: string }>;
+  priceSource: string;
 };
 
 const money = (value: number, digits = 0) =>
@@ -66,7 +86,7 @@ const percent = (value: number | null) =>
 function Icon({
   name,
 }: {
-  name: "league" | "audit" | "publish" | "shield" | "arrow" | "close" | "check";
+  name: "league" | "account" | "audit" | "publish" | "shield" | "arrow" | "close" | "check";
 }) {
   const paths: Record<string, ReactNode> = {
     league: (
@@ -78,6 +98,12 @@ function Icon({
       <>
         <path d="M5 4h14v16H5z" />
         <path d="M8 9h8M8 13h8M8 17h5" />
+      </>
+    ),
+    account: (
+      <>
+        <path d="M3 7h18v12H3zM3 9l3-4h12l3 4" />
+        <path d="M15 13h4v3h-4z" />
       </>
     ),
     publish: (
@@ -111,6 +137,9 @@ export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [audit, setAudit] = useState<Audit[]>([]);
+  const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
+  const [markets, setMarkets] = useState<Market[]>([]);
+  const [selectedAudit, setSelectedAudit] = useState<Audit | null>(null);
   const [selected, setSelected] = useState<Strategy | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -144,13 +173,15 @@ export default function Home() {
         fetch("/api/session"),
         fetch("/api/strategies"),
         fetch("/api/audit"),
+        fetch("/api/portfolio"),
+        fetch("/api/markets"),
       ]);
-      const [session, strategyData, auditData] = await Promise.all(
+      const [session, strategyData, auditData, portfolioData, marketData] = await Promise.all(
         [sessionResponse, ...responses].map((response) => response.json()),
       );
       if (!sessionResponse.ok)
         throw new Error(session.error ?? "Paper workspace is unavailable.");
-      if (!responses[0].ok || !responses[1].ok)
+      if (responses.some((response) => !response.ok))
         throw new Error(
           strategyData.error ??
             auditData.error ??
@@ -159,6 +190,8 @@ export default function Home() {
       setUser(session.user);
       setStrategies(strategyData.strategies);
       setAudit(auditData.audit);
+      setPortfolio(portfolioData.portfolio);
+      setMarkets(marketData.markets);
     } catch (error) {
       setMessage(
         error instanceof Error ? error.message : "Could not load LimitLeague.",
@@ -170,6 +203,12 @@ export default function Home() {
     void refresh();
     if (!window.localStorage.getItem("limitleague-tour-v1")) setTour(true);
   }, [refresh]);
+
+  useEffect(() => {
+    if (!audit.length) return;
+    const auditId = new URLSearchParams(window.location.search).get("audit");
+    if (auditId) setSelectedAudit(audit.find((item) => item.id === auditId) ?? null);
+  }, [audit]);
 
   const metrics = useMemo(() => {
     const proposals = audit.filter((item) => item.event_type === "proposal");
@@ -335,6 +374,34 @@ export default function Home() {
     }
   }
 
+  async function onClosePosition(position: Position) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await post("/api/positions/close", {
+        strategyId: position.strategy_id,
+        market: position.market,
+        side: position.side,
+      });
+      setMessage(`${position.market} closed at ${money(result.price, 2)}. Realized PnL ${money(result.realizedPnlUsd, 2)}.`);
+      await refresh();
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openAudit(item: Audit) {
+    setSelectedAudit(item);
+    window.history.replaceState(null, "", `?audit=${item.id}`);
+  }
+
+  function closeAudit() {
+    setSelectedAudit(null);
+    window.history.replaceState(null, "", window.location.pathname);
+  }
+
   function openStrategy(strategy: Strategy) {
     setSelected(strategy);
     setResult(null);
@@ -362,9 +429,10 @@ export default function Home() {
   const navItems: {
     id: View;
     label: string;
-    icon: "league" | "audit" | "publish";
+    icon: "league" | "account" | "audit" | "publish";
   }[] = [
     { id: "league", label: "League", icon: "league" },
+    { id: "account", label: "Account", icon: "account" },
     { id: "audit", label: "Audit", icon: "audit" },
     { id: "publish", label: "Publish", icon: "publish" },
   ];
@@ -377,15 +445,11 @@ export default function Home() {
           onClick={() => changeView("league")}
           aria-label="LimitLeague home"
         >
-          <span className="brand-mark">
-            <Icon name="shield" />
-          </span>
-          <span>
-            LIMIT<span>LEAGUE</span>
-          </span>
+          <img className="brand-logo" src="/limitleague-logo.svg" alt="" />
+          <span>LIMIT<span>LEAGUE</span></span>
         </button>
         <span className="mode-pill">
-          <i /> PAPER
+            <i /> {portfolio ? `${money(portfolio.availableUsd, 0)} pUSD` : "PAPER"}
         </span>
         <nav className="desktop-nav" aria-label="Primary navigation">
           {navItems.map((item) => (
@@ -434,7 +498,7 @@ export default function Home() {
           <>
             <section className="workspace-head">
               <div>
-                <span className="kicker">SEASON 01 · PAPER LEAGUE</span>
+                <span className="kicker">OPEN PAPER LEAGUE · LIVE STRIKE PRICES</span>
                 <h1>
                   Strategies ranked by <span>discipline.</span>
                 </h1>
@@ -629,7 +693,7 @@ export default function Home() {
                     </div>
                   ) : (
                     audit.slice(0, 5).map((item) => (
-                      <button key={item.id} onClick={() => changeView("audit")}>
+                      <button key={item.id} onClick={() => { setView("audit"); openAudit(item); }}>
                         <span
                           className={`decision-dot ${item.event_type === "rules" ? "rules" : item.allowed ? "pass" : "stop"}`}
                         />
@@ -672,6 +736,60 @@ export default function Home() {
           </>
         )}
 
+        {view === "account" && (
+          <section className="page-section">
+            <div className="page-head account-heading">
+              <div>
+                <span className="kicker">YOUR PAPER WALLET</span>
+                <h1>Trade the league with pUSD.</h1>
+                <p>
+                  Every browser receives one persisted 10,000 pUSD allocation. It is virtual trading credit; fills and marks come from Strike Finance live market data.
+                </p>
+              </div>
+              <span className="source-chip"><i /> Strike marks live</span>
+            </div>
+            {portfolio && (
+              <>
+                <section className="account-balance panel">
+                  <div className="balance-primary">
+                    <span>Paper equity</span>
+                    <b>{money(portfolio.equityUsd, 2)}</b>
+                    <small>{portfolio.currency} · issued when this workspace was created</small>
+                  </div>
+                  <div><span>Available</span><b>{money(portfolio.availableUsd, 2)}</b><small>1× buying power</small></div>
+                  <div><span>Open exposure</span><b>{money(portfolio.exposureUsd, 2)}</b><small>marked by Strike</small></div>
+                  <div><span>Unrealized PnL</span><b className={portfolio.unrealizedPnlUsd < 0 ? "negative" : "positive"}>{money(portfolio.unrealizedPnlUsd, 2)}</b><small>live across positions</small></div>
+                </section>
+                <div className="account-grid">
+                  <section className="panel positions-panel">
+                    <div className="panel-head"><div><span className="kicker">PORTFOLIO</span><h2>Open positions</h2></div><span className="panel-note">Close at the current Strike mark</span></div>
+                    {portfolio.positions.length === 0 ? (
+                      <div className="empty-state"><h3>No open positions.</h3><p>Publish a strategy, then submit an allowed proposal.</p><button className="primary" onClick={() => changeView("league")}>Open league</button></div>
+                    ) : portfolio.positions.map((position) => (
+                      <div className="position-row" key={`${position.strategy_id}-${position.market}-${position.side}`}>
+                        <span><strong>{position.market}</strong><small>{position.side.toUpperCase()} · {position.strategy_name}</small></span>
+                        <span><small>Entry / mark</small><b>{money(position.entry_price, 2)} / {money(position.markPrice, 2)}</b></span>
+                        <span><small>Notional</small><b>{money(position.notionalUsd, 2)}</b></span>
+                        <span><small>Unrealized</small><b className={position.unrealizedPnlUsd < 0 ? "negative" : "positive"}>{money(position.unrealizedPnlUsd, 2)}</b></span>
+                        <button className="secondary" disabled={busy} onClick={() => void onClosePosition(position)}>Close</button>
+                      </div>
+                    ))}
+                  </section>
+                  <section className="panel ledger-panel">
+                    <div className="panel-head"><div><span className="kicker">ACCOUNT HISTORY</span><h2>pUSD ledger</h2></div></div>
+                    {portfolio.ledger.map((entry) => (
+                      <div className="ledger-row" key={entry.id}>
+                        <span><strong>{entry.description}</strong><small>{new Date(entry.created_at).toLocaleString()}</small></span>
+                        <span><b className={entry.amount < 0 ? "negative" : "positive"}>{entry.amount >= 0 ? "+" : ""}{money(entry.amount, 2)}</b><small>Balance {money(entry.balance_after, 2)}</small></span>
+                      </div>
+                    ))}
+                  </section>
+                </div>
+              </>
+            )}
+          </section>
+        )}
+
         {view === "audit" && (
           <section className="page-section">
             <div className="page-head">
@@ -712,7 +830,7 @@ export default function Home() {
                 </div>
               ) : (
                 audit.map((item) => (
-                  <div className="audit-entry" key={item.id}>
+                  <button className="audit-entry" key={item.id} onClick={() => openAudit(item)}>
                     <span>
                       <em
                         className={
@@ -745,7 +863,7 @@ export default function Home() {
                       {item.price ? money(item.price, 2) : "—"}
                     </span>
                     <time>{new Date(item.created_at).toLocaleString()}</time>
-                  </div>
+                  </button>
                 ))
               )}
             </div>
@@ -909,6 +1027,47 @@ export default function Home() {
         ))}
       </nav>
 
+      {selectedAudit && (
+        <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && closeAudit()}>
+          <section className="drawer audit-drawer" role="dialog" aria-modal="true" aria-label="Audit proof">
+            <button className="drawer-close" onClick={closeAudit} aria-label="Close audit proof"><Icon name="close" /></button>
+            <div className="drawer-top">
+              <span className={`status-badge ${selectedAudit.allowed ? "" : "paused"}`}><i />{selectedAudit.allowed ? "ALLOWED" : "BLOCKED"}</span>
+              <span className="owner-badge">PUBLIC PROOF</span>
+            </div>
+            <h2>{selectedAudit.strategy_name}</h2>
+            <p className="drawer-description">{selectedAudit.side?.toUpperCase()} {selectedAudit.market} · {money(selectedAudit.notional_usd ?? 0)} at {money(selectedAudit.price ?? 0, 2)}</p>
+            <div className="proof-hash">
+              <span>SHA-256 decision proof</span>
+              <code>{selectedAudit.event_hash ?? selectedAudit.id}</code>
+            </div>
+            {selectedAudit.limits_snapshot && selectedAudit.decision_snapshot && (
+              <div className="audit-checks">
+                <h3>Deterministic limit check</h3>
+                {[
+                  ["Position size", selectedAudit.decision_snapshot.after.positionNotionalUsd, selectedAudit.limits_snapshot.maxPositionNotionalUsd],
+                  ["Total exposure", selectedAudit.decision_snapshot.after.totalExposureUsd, selectedAudit.limits_snapshot.maxTotalExposureUsd],
+                  ["Open positions", selectedAudit.decision_snapshot.after.openPositionCount, selectedAudit.limits_snapshot.maxOpenPositions],
+                  ["Daily loss", selectedAudit.decision_snapshot.after.dailyLossUsd, selectedAudit.limits_snapshot.dailyLossLimitUsd],
+                ].map(([label, actual, limit]) => (
+                  <div key={String(label)}><span>{label}</span><b>{label === "Open positions" ? actual : money(Number(actual), 2)} / {label === "Open positions" ? limit : money(Number(limit), 2)}</b><em>{Number(actual) <= Number(limit) ? "PASS" : "BLOCK"}</em></div>
+                ))}
+              </div>
+            )}
+            <div className="proof-source">
+              <span>Price source</span><b>Strike Finance live market API</b>
+              <span>Recorded</span><b>{new Date(selectedAudit.created_at).toLocaleString()}</b>
+              <span>Mode</span><b>Persisted paper account</b>
+            </div>
+            {selectedAudit.reasons && selectedAudit.reasons.length > 0 && <div className="block-reason"><strong>Block reason</strong><p>{selectedAudit.reasons.join(" ")}</p></div>}
+            <button className="primary wide" onClick={() => {
+              void navigator.clipboard.writeText(`${window.location.origin}/?audit=${selectedAudit.id}`);
+              setMessage("Verification link copied.");
+            }}>Copy verification link <Icon name="arrow" /></button>
+          </section>
+        </div>
+      )}
+
       {selected && (
         <div
           className="overlay"
@@ -1012,9 +1171,9 @@ export default function Home() {
               <>
                 <form className="proposal-card" onSubmit={onProposal}>
                   <div className="form-title">
-                    <span>TEST</span>
+                    <span>ORDER</span>
                     <div>
-                      <h3>Submit a paper proposal</h3>
+                      <h3>Submit a paper order</h3>
                       <p>Strike prices it. The checker decides.</p>
                     </div>
                   </div>
@@ -1027,10 +1186,11 @@ export default function Home() {
                           setProposal({ ...proposal, market: e.target.value })
                         }
                       >
-                        <option>BTC-USD</option>
-                        <option>ETH-USD</option>
-                        <option>SOL-USD</option>
-                        <option>ADA-USD</option>
+                        {markets.map((market) => (
+                          <option key={market.symbol} value={market.symbol}>
+                            {market.symbol} · {money(market.markPrice, market.markPrice < 1 ? 4 : 2)}
+                          </option>
+                        ))}
                       </select>
                     </label>
                     <label>

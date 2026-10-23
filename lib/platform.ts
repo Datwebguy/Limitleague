@@ -1,5 +1,5 @@
 import type { PoolClient } from "pg";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { db, initializeDatabase } from "./db";
 import { checkLimits } from "./limit-checker";
 import { getStrikeDayOpen, getStrikePrice } from "./strike/client";
@@ -82,7 +82,8 @@ export async function listAudit() {
   const [proposals, changes] = await Promise.all([
     db()
       .query(`SELECT a.id,a.strategy_id,a.market,a.side,a.reason,a.notional_usd::float AS notional_usd,
-    a.price::float AS price,a.allowed,a.reasons,a.mode,a.created_at,s.name AS strategy_name
+    a.price::float AS price,a.allowed,a.reasons,a.mode,a.event_kind,a.limits_snapshot,
+    a.portfolio_snapshot,a.decision_snapshot,a.event_hash,a.created_at,s.name AS strategy_name
     FROM audit_events a JOIN strategies s ON s.id=a.strategy_id WHERE a.user_id=s.owner_id
     ORDER BY a.created_at DESC LIMIT 100`),
     db()
@@ -91,7 +92,7 @@ export async function listAudit() {
     ORDER BY e.created_at DESC LIMIT 100`),
   ]);
   return [
-    ...proposals.rows.map((row) => ({ ...row, event_type: "proposal" })),
+    ...proposals.rows.map((row) => ({ ...row, event_type: row.event_kind ?? "proposal" })),
     ...changes.rows.map((row) => ({ ...row, event_type: "rules" })),
   ]
     .sort(
@@ -99,6 +100,19 @@ export async function listAudit() {
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
     )
     .slice(0, 100);
+}
+
+export async function getAuditEvent(id: string) {
+  await initializeDatabase();
+  const result = await db().query(
+    `SELECT a.id,a.strategy_id,a.market,a.side,a.reason,a.notional_usd::float AS notional_usd,
+     a.price::float AS price,a.allowed,a.reasons,a.mode,a.event_kind,a.limits_snapshot,
+     a.portfolio_snapshot,a.decision_snapshot,a.event_hash,a.created_at,s.name AS strategy_name
+     FROM audit_events a JOIN strategies s ON s.id=a.strategy_id WHERE a.id=$1`,
+    [id],
+  );
+  if (!result.rowCount) throw new Error("Audit record not found.");
+  return result.rows[0];
 }
 
 export async function updateStrategy(
@@ -200,24 +214,18 @@ async function paperState(
       dayOpens.set(symbol, await getStrikeDayOpen(symbol)),
     ),
   );
-  const fills = await client.query(
-    `SELECT market,side,notional_usd::float,price::float,created_at
-    FROM audit_events WHERE user_id=$1 AND strategy_id=$2 AND allowed=true AND mode='paper'`,
-    [userId, strategyId],
+  const realized = await client.query(
+    `SELECT COALESCE(sum(amount),0)::float AS pnl FROM paper_ledger
+     WHERE user_id=$1 AND event_type='realized_pnl' AND created_at >= $2`,
+    [userId, new Date(dayStart)],
   );
-  const pnl = fills.rows.reduce((sum, row) => {
+  const pnl = positions.rows.reduce((sum, row) => {
     const mark = prices.get(row.market);
     const dayOpen = dayOpens.get(row.market);
-    if (!mark || !dayOpen || !row.price)
-      throw new Error("Paper portfolio price is incomplete.");
-    const reference =
-      new Date(row.created_at).getTime() < dayStart ? dayOpen : row.price;
-    return (
-      sum +
-      (((row.side === "long" ? 1 : -1) * row.notional_usd) / row.price) *
-        (mark - reference)
-    );
-  }, 0);
+    if (!mark || !dayOpen) throw new Error("Paper portfolio price is incomplete.");
+    const reference = Math.max(0, row.entry_price) || dayOpen;
+    return sum + (row.side === "long" ? 1 : -1) * row.size * (mark - reference);
+  }, Number(realized.rows[0]?.pnl ?? 0));
   const portfolio: PortfolioState = {
     openPositions: positions.rows.map((row) => ({
       market: row.market,
@@ -227,6 +235,104 @@ async function paperState(
     dailyPnlUsd: pnl,
   };
   return portfolio;
+}
+
+export async function getPaperPortfolio(userId: string) {
+  await initializeDatabase();
+  const [account, positions, ledger] = await Promise.all([
+    db().query(
+      `SELECT starting_balance::float,cash_balance::float,currency,created_at
+       FROM paper_accounts WHERE user_id=$1`,
+      [userId],
+    ),
+    db().query(
+      `SELECT p.strategy_id,p.market,p.side,p.size::float,p.entry_price::float,s.name AS strategy_name
+       FROM paper_positions p JOIN strategies s ON s.id=p.strategy_id
+       WHERE p.user_id=$1 ORDER BY p.market`,
+      [userId],
+    ),
+    db().query(
+      `SELECT id,event_type,amount::float,balance_after::float,description,reference_id,created_at
+       FROM paper_ledger WHERE user_id=$1 ORDER BY created_at DESC LIMIT 30`,
+      [userId],
+    ),
+  ]);
+  if (!account.rowCount) throw new Error("Paper account is unavailable.");
+  const prices = new Map<string, number>();
+  await Promise.all(
+    [...new Set(positions.rows.map((row) => row.market as string))].map(async (market) =>
+      prices.set(market, await getStrikePrice(market)),
+    ),
+  );
+  const enriched = positions.rows.map((row) => {
+    const markPrice = prices.get(row.market)!;
+    const notionalUsd = row.size * markPrice;
+    const unrealizedPnlUsd = (row.side === "long" ? 1 : -1) * row.size * (markPrice - row.entry_price);
+    return { ...row, markPrice, notionalUsd, unrealizedPnlUsd };
+  });
+  const cashBalance = account.rows[0].cash_balance as number;
+  const exposureUsd = enriched.reduce((sum, row) => sum + row.notionalUsd, 0);
+  const unrealizedPnlUsd = enriched.reduce((sum, row) => sum + row.unrealizedPnlUsd, 0);
+  const equityUsd = cashBalance + unrealizedPnlUsd;
+  return {
+    currency: account.rows[0].currency,
+    startingBalanceUsd: account.rows[0].starting_balance,
+    cashBalanceUsd: cashBalance,
+    equityUsd,
+    availableUsd: Math.max(0, equityUsd - exposureUsd),
+    exposureUsd,
+    unrealizedPnlUsd,
+    positions: enriched,
+    ledger: ledger.rows,
+    priceSource: "Strike Finance live mark prices",
+  };
+}
+
+function hashAudit(payload: object) {
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+
+export async function closePaperPosition(
+  userId: string,
+  input: { strategyId: string; market: string; side: "long" | "short" },
+) {
+  await initializeDatabase();
+  const price = await getStrikePrice(input.market);
+  const client = await db().connect();
+  try {
+    await client.query("BEGIN");
+    const found = await client.query(
+      `SELECT p.size::float,p.entry_price::float,s.name AS strategy_name
+       FROM paper_positions p JOIN strategies s ON s.id=p.strategy_id
+       WHERE p.user_id=$1 AND p.strategy_id=$2 AND p.market=$3 AND p.side=$4 FOR UPDATE`,
+      [userId, input.strategyId, input.market, input.side],
+    );
+    if (!found.rowCount) throw new Error("Paper position not found.");
+    const position = found.rows[0];
+    const pnl = (input.side === "long" ? 1 : -1) * position.size * (price - position.entry_price);
+    const account = await client.query(
+      `UPDATE paper_accounts SET cash_balance=cash_balance+$2,updated_at=now()
+       WHERE user_id=$1 RETURNING cash_balance::float`,
+      [userId, pnl],
+    );
+    await client.query(
+      `DELETE FROM paper_positions WHERE user_id=$1 AND strategy_id=$2 AND market=$3 AND side=$4`,
+      [userId, input.strategyId, input.market, input.side],
+    );
+    const ledgerId = randomUUID();
+    await client.query(
+      `INSERT INTO paper_ledger(id,user_id,event_type,amount,balance_after,description,reference_id)
+       VALUES($1,$2,'realized_pnl',$3,$4,$5,$6)`,
+      [ledgerId, userId, pnl, account.rows[0].cash_balance, `${input.side.toUpperCase()} ${input.market} closed at Strike mark`, input.strategyId],
+    );
+    await client.query("COMMIT");
+    return { price, realizedPnlUsd: pnl, ledgerId };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function proposeTrade(userId: string, proposal: TradeProposal) {
@@ -262,14 +368,52 @@ export async function proposeTrade(userId: string, proposal: TradeProposal) {
         price,
       );
       const decision = checkLimits(proposal, strategy.limits, portfolio);
+      const account = await client.query(
+        "SELECT cash_balance::float FROM paper_accounts WHERE user_id=$1 FOR UPDATE",
+        [accountId],
+      );
+      if (!account.rowCount) throw new Error("Paper account is unavailable.");
+      const allPositions = await client.query(
+        "SELECT market,size::float FROM paper_positions WHERE user_id=$1",
+        [accountId],
+      );
+      const accountMarkets = [...new Set(allPositions.rows.map((row) => row.market as string))];
+      const accountPrices = new Map<string, number>();
+      await Promise.all(accountMarkets.map(async (symbol) => accountPrices.set(symbol, symbol === proposal.market ? price : await getStrikePrice(symbol))));
+      const usedBuyingPower = allPositions.rows.reduce(
+        (sum, row) => sum + row.size * (accountPrices.get(row.market) ?? 0),
+        0,
+      );
+      const availableBuyingPower = account.rows[0].cash_balance - usedBuyingPower;
+      if (proposal.notionalUsd > availableBuyingPower) {
+        decision.allowed = false;
+        decision.reasons.push("Paper buying power would be exceeded.");
+      }
       if (strategy.paused) {
         decision.allowed = false;
         decision.reasons.push("Strategy is paused.");
       }
       const auditId = randomUUID();
+      const portfolioSnapshot = {
+        openPositions: portfolio.openPositions,
+        dailyPnlUsd: portfolio.dailyPnlUsd,
+        availableBuyingPowerUsd: availableBuyingPower,
+      };
+      const proofPayload = {
+        id: auditId,
+        strategyId: strategy.id,
+        proposal,
+        strikePrice: price,
+        limits: strategy.limits,
+        portfolio: portfolioSnapshot,
+        decision,
+        mode: "paper",
+      };
+      const eventHash = hashAudit(proofPayload);
       await client.query(
-        `INSERT INTO audit_events(id,strategy_id,user_id,market,side,notional_usd,price,allowed,reasons,reason,mode)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'paper')`,
+        `INSERT INTO audit_events(id,strategy_id,user_id,market,side,notional_usd,price,allowed,reasons,reason,mode,
+         event_kind,limits_snapshot,portfolio_snapshot,decision_snapshot,event_hash)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'paper','proposal',$11,$12,$13,$14)`,
         [
           auditId,
           strategy.id,
@@ -281,6 +425,10 @@ export async function proposeTrade(userId: string, proposal: TradeProposal) {
           decision.allowed,
           JSON.stringify(decision.reasons),
           proposal.reason,
+          JSON.stringify(strategy.limits),
+          JSON.stringify(portfolioSnapshot),
+          JSON.stringify(decision),
+          eventHash,
         ],
       );
       if (decision.allowed) {

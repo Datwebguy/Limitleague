@@ -32,14 +32,44 @@ export async function currentUser() {
 export async function ensurePaperUser() {
   await initializeDatabase();
   const existing = await currentUser();
-  if (existing) return existing;
+  if (existing) {
+    await ensurePaperAccount(existing.id);
+    return existing;
+  }
   const id = randomUUID();
   await db().query(
     "INSERT INTO users(id,email,password_hash) VALUES($1,$2,$3)",
     [id, `paper-${id}@limitleague.local`, "paper-session"],
   );
+  await ensurePaperAccount(id);
   await createSession(id);
   return { id };
+}
+export async function ensurePaperAccount(userId: string) {
+  await initializeDatabase();
+  const allocation = Number(process.env.PAPER_STARTING_BALANCE_USD ?? "10000");
+  const client = await db().connect();
+  try {
+    await client.query("BEGIN");
+    const inserted = await client.query(
+      `INSERT INTO paper_accounts(user_id,starting_balance,cash_balance)
+       VALUES($1,$2,$2) ON CONFLICT DO NOTHING RETURNING user_id`,
+      [userId, allocation],
+    );
+    if (inserted.rowCount) {
+      await client.query(
+        `INSERT INTO paper_ledger(id,user_id,event_type,amount,balance_after,description)
+         VALUES($1,$2,'allocation',$3,$3,'Initial paper trading allocation')`,
+        [randomUUID(), userId, allocation],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 export async function requireSameOrigin(request: Request) {
   const origin = request.headers.get("origin");
