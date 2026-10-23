@@ -553,8 +553,15 @@ export default function Home() {
                 <h2>The full proof loop</h2>
               </div>
               <div className="path-steps">
-                <button onClick={() => changeView("publish")}>
+                <button onClick={() => changeView("account")}>
                   <b>01</b>
+                  <span>
+                    <strong>Open paper account</strong>
+                    <small>Start with persisted pUSD buying power.</small>
+                  </span>
+                </button>
+                <button onClick={() => changeView("publish")}>
+                  <b>02</b>
                   <span>
                     <strong>Publish limits</strong>
                     <small>Start with the prefilled risk caps.</small>
@@ -563,14 +570,14 @@ export default function Home() {
                 <button
                   onClick={() => strategies[0] && openStrategy(strategies[0])}
                 >
-                  <b>02</b>
+                  <b>03</b>
                   <span>
                     <strong>Test a proposal</strong>
                     <small>Watch one pass or hit a hard limit.</small>
                   </span>
                 </button>
                 <button onClick={() => changeView("audit")}>
-                  <b>03</b>
+                  <b>04</b>
                   <span>
                     <strong>Verify the record</strong>
                     <small>See the decision and exact reason.</small>
@@ -1390,21 +1397,19 @@ export default function Home() {
             aria-label="LimitLeague judge tour"
           >
             <div className="tour-progress">
-              <span>{tourStep + 1} / 3</span>
+              <span>{tourStep + 1} / 4</span>
               <button onClick={() => finishTour()} aria-label="Close tour">
                 Skip tour
               </button>
             </div>
             {tourStep === 0 && (
               <>
-                <span className="tour-icon">
-                  <Icon name="shield" />
-                </span>
-                <h2>Risk rules come first.</h2>
+                <span className="tour-icon"><Icon name="account" /></span>
+                <h2>Your paper account is ready.</h2>
                 <p>
-                  Every strategy publishes hard limits before it builds a
-                  record. No email and no wallet are required in the paper
-                  league.
+                  LimitLeague creates a private workspace and issues its pUSD
+                  allocation automatically. Account shows buying power, live
+                  PnL, positions, and the complete balance ledger.
                 </p>
               </>
             )}
@@ -1413,15 +1418,25 @@ export default function Home() {
                 <span className="tour-icon">
                   <Icon name="publish" />
                 </span>
-                <h2>Test the enforcement.</h2>
+                <h2>Publish the rules first.</h2>
                 <p>
-                  Publish with the prefilled limits, open your strategy, and
-                  submit a proposal. Enter an amount inside the published cap,
-                  then go above it to see the checker block the order.
+                  Set position size, daily loss, total exposure, and open
+                  position limits before the strategy builds a record.
                 </p>
               </>
             )}
             {tourStep === 2 && (
+              <>
+                <span className="tour-icon"><Icon name="shield" /></span>
+                <h2>Every order is checked.</h2>
+                <p>
+                  Choose a live Strike market and submit a paper order. The
+                  checker reads buying power and every limit before allowing a
+                  position to open.
+                </p>
+              </>
+            )}
+            {tourStep === 3 && (
               <>
                 <span className="tour-icon">
                   <Icon name="audit" />
@@ -1435,7 +1450,7 @@ export default function Home() {
               </>
             )}
             <div className="tour-dots">
-              {[0, 1, 2].map((index) => (
+              {[0, 1, 2, 3].map((index) => (
                 <i key={index} className={index === tourStep ? "active" : ""} />
               ))}
             </div>
@@ -1451,10 +1466,10 @@ export default function Home() {
               <button
                 className="primary"
                 onClick={() =>
-                  tourStep < 2 ? setTourStep(tourStep + 1) : finishTour(true)
+                  tourStep < 3 ? setTourStep(tourStep + 1) : finishTour(true)
                 }
               >
-                {tourStep < 2 ? "Next" : "Publish a strategy"}
+                {tourStep < 3 ? "Next" : "Publish a strategy"}
                 <Icon name="arrow" />
               </button>
             </div>

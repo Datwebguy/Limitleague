@@ -24,31 +24,44 @@ Every browser workspace receives a persisted 10,000 pUSD paper allocation. The a
 
 The public audit trail records allowed and blocked proposals with the exact limits and portfolio state used by the checker. Each new decision has a SHA-256 proof ID and a shareable verification link. Performance shown in the app is paper performance derived from positions and current Strike marks; a strategy with no trades shows no return.
 
-## How it works
+## How the platform works
 
 ```mermaid
 flowchart LR
-    A[Publish strategy and limits] --> B[Submit trade proposal]
-    B --> C[Read paper portfolio and Strike price]
-    C --> D{Check every limit}
-    D -->|Allowed| E[Open paper position]
-    D -->|Blocked| F[Record reason]
-    E --> G[Public audit and discovery]
-    F --> G
-    B --> H[Follower portfolios]
-    H --> D
+    A[Receive 10,000 pUSD] --> B[Publish strategy and limits]
+    B --> C[Submit paper order]
+    C --> D[Read account state and Strike mark]
+    D --> E{Check buying power and every limit}
+    E -->|Allowed| F[Open paper position]
+    E -->|Blocked| G[Record exact reason]
+    F --> H[Mark PnL with Strike data]
+    G --> I[Public audit proof]
+    H --> I
+    C --> J[Follower accounts]
+    J --> E
 ```
 
-The deterministic checker evaluates maximum position notional, total open exposure, number of open positions, daily loss, and pause state. The same proposal may be allowed for the publisher and blocked for a follower because their portfolios differ. Pauses take effect immediately; published limits can only be tightened.
+1. A private paper workspace is created automatically and funded once with 10,000 pUSD.
+2. A publisher declares the strategy's maximum position, daily loss, total exposure, open-position count, and automatic pause rule.
+3. A paper order selects a live Strike market. LimitLeague reads the current Strike mark and the account's persisted portfolio.
+4. The deterministic checker evaluates buying power and every published limit before a position can open.
+5. Allowed orders become paper positions. Blocked orders never change the portfolio.
+6. The decision, price, rule snapshot, portfolio snapshot, reason, and SHA-256 proof ID enter the public audit.
+7. Followers receive the same proposed order, checked independently against their own account state.
 
-## Use the platform
+Published limits can be tightened and strategies can be paused immediately. A strategy's public performance comes from compliant paper positions marked with current Strike data.
 
-1. **Open the paper league** at [limitleague.vercel.app](https://limitleague.vercel.app). Your private paper session starts automatically.
-2. **Publish a strategy** with a name, description, and hard limits.
-3. **Submit a paper trade proposal.** Choose from the live Strike market catalog; LimitLeague gets the current mark, checks the rules and buying power, then records the decision.
-4. **Manage the paper account.** Review balances and PnL, then close positions at the current Strike mark.
-5. **Verify the public audit.** Open any decision to inspect every before/after value or copy its verification link.
-6. **Paper-follow a strategy** to apply its published limits to your own paper portfolio.
+## How to use LimitLeague
+
+1. Open [limitleague.vercel.app](https://limitleague.vercel.app). The paper workspace starts automatically; no registration form is required.
+2. Open **Account** to confirm the pUSD allocation, equity, available buying power, exposure, positions, and ledger.
+3. Open **Publish**, describe the strategy, set all four hard limits, and publish the rule set.
+4. Open the strategy from **League**, choose any active Strike market, select long or short, enter the notional and submit the paper order.
+5. Read the allow or block result. The panel shows the resulting position size and exposure against the published ceilings.
+6. Return to **Account** to track live unrealized PnL or close an open position at the current Strike mark.
+7. Open **Audit**, select a decision, and inspect its exact inputs, outputs, block reasons, timestamp, source, and SHA-256 proof ID. Use **Copy verification link** to share that record.
+8. Select another publisher's strategy and choose **Paper follow**. Future proposals are checked against your own paper account under that strategy's limits.
+9. Owners can pause a strategy instantly or publish tighter limits from the strategy controls; each change remains visible in the audit trail.
 
 ## Run locally
 
