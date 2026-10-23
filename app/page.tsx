@@ -1,78 +1,1306 @@
 "use client";
-import { FormEvent, useCallback, useEffect, useState } from "react";
 
-type Limits={maxPositionNotionalUsd:number;dailyLossLimitUsd:number;maxTotalExposureUsd:number;maxOpenPositions:number;pauseAtDailyLoss:true};
-type Strategy={id:string;owner_id:string;name:string;description:string;mode:"paper"|"live";limits:Limits;paused:boolean;followers:number;audit_count:number;pnlUsd:number;returnPct:number|null;score:number|null};
-type Audit={id:string;strategy_id:string;strategy_name:string;event_type:"proposal"|"rules";action?:string;paused?:boolean;market?:string;side?:string;notional_usd?:number;price?:number;allowed?:boolean;reasons?:string[];created_at:string};
-type User={id:string;email:string};
-type View="discover"|"activity"|"publish"|"account";
-const money=(value:number)=>new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0}).format(value);
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 
-export default function Home(){
-  const [view,setView]=useState<View>("discover");
-  const [user,setUser]=useState<User|null>(null);
-  const [strategies,setStrategies]=useState<Strategy[]>([]);
-  const [audit,setAudit]=useState<Audit[]>([]);
-  const [selected,setSelected]=useState<Strategy|null>(null);
-  const [message,setMessage]=useState("");
-  const [busy,setBusy]=useState(false);
-  const [authMode,setAuthMode]=useState<"register"|"login">("register");
-  const [auth,setAuth]=useState({email:"",password:""});
-  const [draft,setDraft]=useState({name:"",description:"",maxPositionNotionalUsd:"2000",dailyLossLimitUsd:"300",maxTotalExposureUsd:"5000",maxOpenPositions:"2"});
-  const [proposal,setProposal]=useState({market:"BTC-USD",side:"long",notionalUsd:"100",reason:""});
-  const [tighten,setTighten]=useState({maxPositionNotionalUsd:"",dailyLossLimitUsd:"",maxTotalExposureUsd:"",maxOpenPositions:""});
-  const [result,setResult]=useState<{allowed:boolean;reasons:string[];price:number}|null>(null);
-  const refresh=useCallback(async()=>{
+type Limits = {
+  maxPositionNotionalUsd: number;
+  dailyLossLimitUsd: number;
+  maxTotalExposureUsd: number;
+  maxOpenPositions: number;
+  pauseAtDailyLoss: true;
+};
+type Strategy = {
+  id: string;
+  owner_id: string;
+  name: string;
+  description: string;
+  mode: "paper" | "live";
+  limits: Limits;
+  paused: boolean;
+  following: boolean;
+  followers: number;
+  audit_count: number;
+  pnlUsd: number;
+  returnPct: number | null;
+  score: number | null;
+};
+type Audit = {
+  id: string;
+  strategy_id: string;
+  strategy_name: string;
+  event_type: "proposal" | "rules";
+  action?: string;
+  paused?: boolean;
+  market?: string;
+  side?: string;
+  notional_usd?: number;
+  price?: number;
+  allowed?: boolean;
+  reasons?: string[];
+  created_at: string;
+};
+type User = { id: string };
+type View = "league" | "audit" | "publish";
+type Decision = {
+  allowed: boolean;
+  reasons: string[];
+  price: number;
+  after: {
+    positionNotionalUsd: number;
+    totalExposureUsd: number;
+    openPositionCount: number;
+    dailyLossUsd: number;
+  };
+};
+
+const money = (value: number, digits = 0) =>
+  new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: digits,
+  }).format(value);
+const percent = (value: number | null) =>
+  value === null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
+
+function Icon({
+  name,
+}: {
+  name: "league" | "audit" | "publish" | "shield" | "arrow" | "close" | "check";
+}) {
+  const paths: Record<string, ReactNode> = {
+    league: (
+      <>
+        <path d="M4 19V9m6 10V5m6 14v-7m4 7H2" />
+      </>
+    ),
+    audit: (
+      <>
+        <path d="M5 4h14v16H5z" />
+        <path d="M8 9h8M8 13h8M8 17h5" />
+      </>
+    ),
+    publish: (
+      <>
+        <path d="M12 5v14M5 12h14" />
+      </>
+    ),
+    shield: (
+      <>
+        <path d="M12 3l7 3v5c0 5-3.4 8.5-7 10-3.6-1.5-7-5-7-10V6z" />
+        <path d="M9 12l2 2 4-4" />
+      </>
+    ),
+    arrow: <path d="M5 12h14m-5-5 5 5-5 5" />,
+    close: (
+      <>
+        <path d="M6 6l12 12M18 6 6 18" />
+      </>
+    ),
+    check: <path d="M5 12l4 4L19 6" />,
+  };
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      {paths[name]}
+    </svg>
+  );
+}
+
+export default function Home() {
+  const [view, setView] = useState<View>("league");
+  const [user, setUser] = useState<User | null>(null);
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const [audit, setAudit] = useState<Audit[]>([]);
+  const [selected, setSelected] = useState<Strategy | null>(null);
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [tour, setTour] = useState(false);
+  const [tourStep, setTourStep] = useState(0);
+  const [draft, setDraft] = useState({
+    name: "",
+    description: "",
+    maxPositionNotionalUsd: "2000",
+    dailyLossLimitUsd: "300",
+    maxTotalExposureUsd: "5000",
+    maxOpenPositions: "2",
+  });
+  const [proposal, setProposal] = useState({
+    market: "BTC-USD",
+    side: "long",
+    notionalUsd: "100",
+    reason: "Test the published limits",
+  });
+  const [tighten, setTighten] = useState({
+    maxPositionNotionalUsd: "",
+    dailyLossLimitUsd: "",
+    maxTotalExposureUsd: "",
+    maxOpenPositions: "",
+  });
+  const [result, setResult] = useState<Decision | null>(null);
+
+  const refresh = useCallback(async () => {
     try {
-      const responses=await Promise.all([fetch("/api/strategies"),fetch("/api/audit"),fetch("/api/auth/me")]);
-      const [s,a,u]=await Promise.all(responses.map(r=>r.json()));
-      if(!responses[0].ok || !responses[1].ok) throw new Error(s.error??a.error??"Service unavailable.");
-      setStrategies(s.strategies);setAudit(a.audit);setUser(u.user);
-    } catch(error){setMessage(error instanceof Error?error.message:"Could not load LimitLeague.");}
-  },[]);
-  useEffect(()=>{void refresh();},[refresh]);
-  async function post(path:string,body:object){
-    const response=await fetch(path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
-    const data=await response.json();
-    if(!response.ok) throw new Error(typeof data.error==="string"?data.error:"Please check the information and try again.");
+      const [sessionResponse, ...responses] = await Promise.all([
+        fetch("/api/session"),
+        fetch("/api/strategies"),
+        fetch("/api/audit"),
+      ]);
+      const [session, strategyData, auditData] = await Promise.all(
+        [sessionResponse, ...responses].map((response) => response.json()),
+      );
+      if (!sessionResponse.ok)
+        throw new Error(session.error ?? "Paper workspace is unavailable.");
+      if (!responses[0].ok || !responses[1].ok)
+        throw new Error(
+          strategyData.error ??
+            auditData.error ??
+            "Could not load LimitLeague.",
+        );
+      setUser(session.user);
+      setStrategies(strategyData.strategies);
+      setAudit(auditData.audit);
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Could not load LimitLeague.",
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    if (!window.localStorage.getItem("limitleague-tour-v1")) setTour(true);
+  }, [refresh]);
+
+  const metrics = useMemo(() => {
+    const proposals = audit.filter((item) => item.event_type === "proposal");
+    const allowed = proposals.filter((item) => item.allowed).length;
+    return {
+      decisions: proposals.length,
+      allowedRate: proposals.length
+        ? Math.round((allowed / proposals.length) * 100)
+        : null,
+      followers: strategies.reduce((sum, item) => sum + item.followers, 0),
+    };
+  }, [audit, strategies]);
+
+  async function post(path: string, body: object) {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json();
+    if (!response.ok)
+      throw new Error(
+        typeof data.error === "string"
+          ? data.error
+          : "Check the information and try again.",
+      );
     return data;
   }
-  async function onAuth(event:FormEvent){event.preventDefault();setBusy(true);setMessage("");try{await post("/api/auth/"+authMode,auth);setAuth({email:"",password:""});setView("discover");await refresh();}catch(error){setMessage((error as Error).message)}finally{setBusy(false)}}
-  async function onPublish(event:FormEvent){event.preventDefault();setBusy(true);setMessage("");try{
-    await post("/api/strategies",{name:draft.name,description:draft.description,limits:{maxPositionNotionalUsd:Number(draft.maxPositionNotionalUsd),dailyLossLimitUsd:Number(draft.dailyLossLimitUsd),maxTotalExposureUsd:Number(draft.maxTotalExposureUsd),maxOpenPositions:Number(draft.maxOpenPositions),pauseAtDailyLoss:true}});
-    setDraft({...draft,name:"",description:""});setView("discover");setMessage("Strategy published.");await refresh();
-  }catch(error){setMessage((error as Error).message)}finally{setBusy(false)}}
-  async function onFollow(strategy:Strategy){setBusy(true);setMessage("");try{await post("/api/follows",{strategyId:strategy.id});setMessage("You’re following "+strategy.name+" in paper mode.");await refresh();}catch(error){setMessage((error as Error).message)}finally{setBusy(false)}}
-  async function onProposal(event:FormEvent){event.preventDefault();if(!selected)return;setBusy(true);setResult(null);setMessage("");try{
-    const response=await post("/api/proposals",{strategyId:selected.id,market:proposal.market.toUpperCase(),side:proposal.side,notionalUsd:Number(proposal.notionalUsd),reason:proposal.reason});
-    setResult({allowed:response.ownerDecision.decision.allowed,reasons:response.ownerDecision.decision.reasons,price:response.price});await refresh();
-  }catch(error){setMessage((error as Error).message)}finally{setBusy(false)}}
-  async function onPause(){if(!selected)return;setBusy(true);try{
-    const response=await fetch("/api/strategies",{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({strategyId:selected.id,paused:!selected.paused})});
-    const data=await response.json();if(!response.ok)throw new Error(data.error??"Could not update strategy.");
-    setSelected({...selected,paused:data.strategy.paused});setMessage(data.strategy.paused?"Strategy paused.":"Strategy resumed.");await refresh();
-  }catch(error){setMessage((error as Error).message)}finally{setBusy(false)}}
-  async function onTighten(event:FormEvent){event.preventDefault();if(!selected)return;setBusy(true);try{
-    const limits={maxPositionNotionalUsd:Number(tighten.maxPositionNotionalUsd),dailyLossLimitUsd:Number(tighten.dailyLossLimitUsd),maxTotalExposureUsd:Number(tighten.maxTotalExposureUsd),maxOpenPositions:Number(tighten.maxOpenPositions),pauseAtDailyLoss:true};
-    const response=await fetch("/api/strategies",{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({strategyId:selected.id,limits})});
-    const data=await response.json();if(!response.ok)throw new Error(data.error??"Could not tighten limits.");
-    setSelected({...selected,limits:data.strategy.limits});setMessage("Published limits tightened.");await refresh();
-  }catch(error){setMessage((error as Error).message)}finally{setBusy(false)}}
-  function openStrategy(strategy:Strategy){setSelected(strategy);setResult(null);setTighten({maxPositionNotionalUsd:String(strategy.limits.maxPositionNotionalUsd),dailyLossLimitUsd:String(strategy.limits.dailyLossLimitUsd),maxTotalExposureUsd:String(strategy.limits.maxTotalExposureUsd),maxOpenPositions:String(strategy.limits.maxOpenPositions)});}
-  return <div className="shell">
-    <aside className="rail"><div className="logo"><span className="logo-mark">L</span><span>LIMIT<span className="mint">LEAGUE</span></span></div><p className="rail-caption">THE DISCIPLINE LEAGUE</p><nav>
-      {(["discover","activity","publish","account"] as View[]).map((item)=><button key={item} className={view===item?"active":""} onClick={()=>{setView(item);setSelected(null);setMessage("");}}>{item==="discover"?"◫":item==="activity"?"≡":item==="publish"?"＋":"○"}<span>{item==="activity"?"Audit trail":item==="account"?(user?"Account":"Sign in"):item[0].toUpperCase()+item.slice(1)}</span></button>)}
-    </nav><div className="rail-footer"><span className="status-dot"/> Strike market data</div></aside>
-    <main className="main">
-      <header className="top"><div><span className="overline">LIMITLEAGUE</span><span className="slash">/</span><b>{view==="activity"?"AUDIT TRAIL":view.toUpperCase()}</b></div><div>{user?<span className="account-name">{user.email}</span>:<button className="outline" onClick={()=>setView("account")}>Sign in</button>}</div></header>
-      {message&&<div className="notice" role="status">{message}<button onClick={()=>setMessage("")} aria-label="Dismiss message">×</button></div>}
-      {view==="discover"&&<><section className="hero"><div><div className="eyebrow"><i/> STRATEGIES WITH PUBLISHED LIMITS</div><h1>Trust the <em>rules.</em><br/>Then the results.</h1><p>Every strategy shows its risk limits and every trade decision. Follow the ones that earn your confidence.</p><button className="solid" onClick={()=>setView("publish")}>Publish a strategy <span>↗</span></button></div><div className="hero-art" aria-hidden="true"><div className="orb"><span>LIMIT<br/>CHECK</span><b>✓</b></div><div className="orbit orbit-one"/><div className="orbit orbit-two"/></div></section>
-        <section className="section"><div className="section-heading"><div><div className="eyebrow"><i/> EXPLORE</div><h2>Published strategies</h2></div><span>{strategies.length} strategies</span></div>
-          {strategies.length===0?<div className="empty"><h3>Be the first to publish.</h3><p>Set your hard limits and start building a public track record.</p><button className="outline" onClick={()=>setView("publish")}>Create a strategy →</button></div>:<div className="cards">{strategies.map((s)=><article className="card" key={s.id}><div className="card-top"><span className="strategy-icon">{s.name[0].toUpperCase()}</span><span className="mode">{s.paused?"PAUSED":s.mode.toUpperCase()}</span></div><h3>{s.name}</h3><p>{s.description||"Risk limits are public. Trade decisions are recorded."}</p><div className="performance"><small>PAPER RETURN ON RISK BUDGET</small><strong>{s.returnPct===null?"No trades yet":s.returnPct.toFixed(2)+"%"}</strong></div><div className="rule-grid"><div><small>MAX POSITION</small><b>{money(s.limits.maxPositionNotionalUsd)}</b></div><div><small>DAILY LOSS</small><b>{money(s.limits.dailyLossLimitUsd)}</b></div><div><small>EXPOSURE</small><b>{money(s.limits.maxTotalExposureUsd)}</b></div><div><small>POSITIONS</small><b>{s.limits.maxOpenPositions}</b></div></div><div className="card-end"><span>{s.followers} followers · {s.audit_count} decisions</span><button onClick={()=>openStrategy(s)}>View strategy →</button></div></article>)}</div>}
-        </section></>}
-      {view==="activity"&&<section className="section"><div className="eyebrow"><i/> OPEN RECORD</div><h1 className="page-title">Every decision, visible.</h1><p className="intro">Trade decisions and changes to published limits appear here as they happen.</p><div className="activity-list">{audit.length===0?<div className="empty"><h3>No activity yet.</h3><p>The audit trail begins with the first trade proposal or rule change.</p></div>:audit.map(a=><div className="activity-row" key={a.id}><span className={a.event_type==="rules"?"decision-tag":"decision-tag "+(a.allowed?"allowed":"blocked")}>{a.event_type==="rules"?"RULES":a.allowed?"ALLOWED":"BLOCKED"}</span><div><b>{a.strategy_name}</b><span>{a.event_type==="rules"?a.action:`${a.side?.toUpperCase()} ${a.market} · ${money(a.notional_usd??0)}`}</span>{a.event_type==="proposal"&&!a.allowed&&<small>{a.reasons?.join(" ")}</small>}</div><time>{new Date(a.created_at).toLocaleString()}</time></div>)}</div></section>}
-      {view==="publish"&&<section className="section form-page"><div className="eyebrow"><i/> MAKE YOUR RULES PUBLIC</div><h1 className="page-title">Publish a strategy.</h1><p className="intro">These limits apply to every proposal and to everyone who follows you.</p>{!user?<div className="empty"><h3>Sign in to publish.</h3><button className="solid" onClick={()=>setView("account")}>Create an account →</button></div>:<form className="form-card" onSubmit={onPublish}><label>Strategy name<input required minLength={3} maxLength={80} value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})} placeholder="Give your strategy a name"/></label><label>Description<textarea maxLength={1000} value={draft.description} onChange={e=>setDraft({...draft,description:e.target.value})} placeholder="What does your strategy do?"/></label><div className="form-grid"><label>Maximum position (USD)<input required type="number" min="1" value={draft.maxPositionNotionalUsd} onChange={e=>setDraft({...draft,maxPositionNotionalUsd:e.target.value})}/></label><label>Daily loss limit (USD)<input required type="number" min="1" value={draft.dailyLossLimitUsd} onChange={e=>setDraft({...draft,dailyLossLimitUsd:e.target.value})}/></label><label>Maximum exposure (USD)<input required type="number" min="1" value={draft.maxTotalExposureUsd} onChange={e=>setDraft({...draft,maxTotalExposureUsd:e.target.value})}/></label><label>Maximum open positions<input required type="number" min="1" value={draft.maxOpenPositions} onChange={e=>setDraft({...draft,maxOpenPositions:e.target.value})}/></label></div><p className="form-note">New proposals pause when the daily loss limit is reached. You can tighten or pause your limits later.</p><button disabled={busy} className="solid">Publish strategy →</button></form>}</section>}
-      {view==="account"&&<section className="section form-page"><div className="eyebrow"><i/> YOUR ACCOUNT</div><h1 className="page-title">{user?"Welcome back.":"Join the league."}</h1>{user?<div className="empty"><h3>{user.email}</h3><p>Your strategies and followed accounts use the same published limits.</p><button className="outline" onClick={()=>setView("discover")}>Explore strategies →</button></div>:<form className="form-card auth-card" onSubmit={onAuth}><div className="switch"><button type="button" className={authMode==="register"?"chosen":""} onClick={()=>setAuthMode("register")}>Create account</button><button type="button" className={authMode==="login"?"chosen":""} onClick={()=>setAuthMode("login")}>Sign in</button></div><label>Email<input required type="email" value={auth.email} onChange={e=>setAuth({...auth,email:e.target.value})}/></label><label>Password<input required type="password" minLength={authMode==="register"?12:1} value={auth.password} onChange={e=>setAuth({...auth,password:e.target.value})}/></label><button className="solid" disabled={busy}>{authMode==="register"?"Create account":"Sign in"} →</button></form>}</section>}
-      {selected&&<div className="overlay" onClick={()=>setSelected(null)}><section className="drawer" onClick={e=>e.stopPropagation()}><button className="close" onClick={()=>setSelected(null)} aria-label="Close">×</button><div className="eyebrow"><i/> STRATEGY</div><h2>{selected.name}</h2><p>{selected.description||"Published limits and a public decision record."}</p><div className="drawer-rules"><div><span>Max position</span><b>{money(selected.limits.maxPositionNotionalUsd)}</b></div><div><span>Daily loss</span><b>{money(selected.limits.dailyLossLimitUsd)}</b></div><div><span>Total exposure</span><b>{money(selected.limits.maxTotalExposureUsd)}</b></div><div><span>Open positions</span><b>{selected.limits.maxOpenPositions}</b></div></div><div className="drawer-actions"><button className="solid" disabled={busy||!user} onClick={()=>void onFollow(selected)}>Paper follow →</button><button className="outline" onClick={()=>{setSelected(null);setView("activity")}}>View audit trail</button></div>{user?.id===selected.owner_id&&<><div className="owner-controls"><button className="outline" disabled={busy} onClick={()=>void onPause()}>{selected.paused?"Resume strategy":"Pause strategy"}</button><span>{selected.paused?"No proposals can open positions while paused.":"A pause takes effect immediately."}</span></div><form className="proposal-form" onSubmit={onTighten}><h3>Tighten published limits</h3><p>Limits can only move down. Every change appears in the public record.</p><div className="form-grid"><label>Max position (USD)<input required type="number" min="1" max={selected.limits.maxPositionNotionalUsd} value={tighten.maxPositionNotionalUsd} onChange={e=>setTighten({...tighten,maxPositionNotionalUsd:e.target.value})}/></label><label>Daily loss (USD)<input required type="number" min="1" max={selected.limits.dailyLossLimitUsd} value={tighten.dailyLossLimitUsd} onChange={e=>setTighten({...tighten,dailyLossLimitUsd:e.target.value})}/></label><label>Total exposure (USD)<input required type="number" min="1" max={selected.limits.maxTotalExposureUsd} value={tighten.maxTotalExposureUsd} onChange={e=>setTighten({...tighten,maxTotalExposureUsd:e.target.value})}/></label><label>Open positions<input required type="number" min="1" max={selected.limits.maxOpenPositions} value={tighten.maxOpenPositions} onChange={e=>setTighten({...tighten,maxOpenPositions:e.target.value})}/></label></div><button className="outline" disabled={busy}>Publish tighter limits →</button></form><form className="proposal-form" onSubmit={onProposal}><h3>Propose a trade</h3><div className="form-grid"><label>Market<input required value={proposal.market} onChange={e=>setProposal({...proposal,market:e.target.value})}/></label><label>Side<select value={proposal.side} onChange={e=>setProposal({...proposal,side:e.target.value})}><option value="long">Long</option><option value="short">Short</option></select></label></div><label>Notional (USD)<input required type="number" min="1" value={proposal.notionalUsd} onChange={e=>setProposal({...proposal,notionalUsd:e.target.value})}/></label><label>Reason<textarea required value={proposal.reason} onChange={e=>setProposal({...proposal,reason:e.target.value})}/></label><button className="solid" disabled={busy}>Submit proposal →</button>{result&&<div className={result.allowed?"outcome ok":"outcome no"}>{result.allowed?"Allowed at "+money(result.price):"Blocked: "+result.reasons.join(" ")}</div>}</form></>}</section></div>}
-    </main></div>;
+
+  async function onPublish(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    try {
+      const data = await post("/api/strategies", {
+        name: draft.name,
+        description: draft.description,
+        limits: {
+          maxPositionNotionalUsd: Number(draft.maxPositionNotionalUsd),
+          dailyLossLimitUsd: Number(draft.dailyLossLimitUsd),
+          maxTotalExposureUsd: Number(draft.maxTotalExposureUsd),
+          maxOpenPositions: Number(draft.maxOpenPositions),
+          pauseAtDailyLoss: true,
+        },
+      });
+      const created: Strategy = {
+        ...data.strategy,
+        following: false,
+        followers: 0,
+        audit_count: 0,
+        pnlUsd: 0,
+        returnPct: null,
+        score: null,
+      };
+      setDraft({ ...draft, name: "", description: "" });
+      setView("league");
+      setMessage("Strategy published. Submit a proposal to test its limits.");
+      await refresh();
+      openStrategy(created);
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onFollow(strategy: Strategy) {
+    setBusy(true);
+    setMessage("");
+    try {
+      await post("/api/follows", { strategyId: strategy.id });
+      setSelected({
+        ...strategy,
+        following: true,
+        followers: strategy.followers + (strategy.following ? 0 : 1),
+      });
+      setMessage(`You are paper-following ${strategy.name}.`);
+      await refresh();
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onProposal(event: FormEvent) {
+    event.preventDefault();
+    if (!selected) return;
+    setBusy(true);
+    setResult(null);
+    setMessage("");
+    try {
+      const response = await post("/api/proposals", {
+        strategyId: selected.id,
+        market: proposal.market.toUpperCase(),
+        side: proposal.side,
+        notionalUsd: Number(proposal.notionalUsd),
+        reason: proposal.reason,
+      });
+      setResult({ ...response.ownerDecision.decision, price: response.price });
+      await refresh();
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onPause() {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      const response = await fetch("/api/strategies", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          strategyId: selected.id,
+          paused: !selected.paused,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok)
+        throw new Error(data.error ?? "Could not update strategy.");
+      setSelected({ ...selected, paused: data.strategy.paused });
+      setMessage(
+        data.strategy.paused ? "Strategy paused." : "Strategy resumed.",
+      );
+      await refresh();
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onTighten(event: FormEvent) {
+    event.preventDefault();
+    if (!selected) return;
+    setBusy(true);
+    try {
+      const limits = {
+        maxPositionNotionalUsd: Number(tighten.maxPositionNotionalUsd),
+        dailyLossLimitUsd: Number(tighten.dailyLossLimitUsd),
+        maxTotalExposureUsd: Number(tighten.maxTotalExposureUsd),
+        maxOpenPositions: Number(tighten.maxOpenPositions),
+        pauseAtDailyLoss: true as const,
+      };
+      const response = await fetch("/api/strategies", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ strategyId: selected.id, limits }),
+      });
+      const data = await response.json();
+      if (!response.ok)
+        throw new Error(data.error ?? "Could not tighten limits.");
+      setSelected({ ...selected, limits: data.strategy.limits });
+      setMessage("Published limits tightened.");
+      await refresh();
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openStrategy(strategy: Strategy) {
+    setSelected(strategy);
+    setResult(null);
+    setTighten({
+      maxPositionNotionalUsd: String(strategy.limits.maxPositionNotionalUsd),
+      dailyLossLimitUsd: String(strategy.limits.dailyLossLimitUsd),
+      maxTotalExposureUsd: String(strategy.limits.maxTotalExposureUsd),
+      maxOpenPositions: String(strategy.limits.maxOpenPositions),
+    });
+  }
+
+  function changeView(next: View) {
+    setView(next);
+    setSelected(null);
+    setMessage("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+  function finishTour(openPublish = false) {
+    window.localStorage.setItem("limitleague-tour-v1", "1");
+    setTour(false);
+    setTourStep(0);
+    if (openPublish) changeView("publish");
+  }
+
+  const navItems: {
+    id: View;
+    label: string;
+    icon: "league" | "audit" | "publish";
+  }[] = [
+    { id: "league", label: "League", icon: "league" },
+    { id: "audit", label: "Audit", icon: "audit" },
+    { id: "publish", label: "Publish", icon: "publish" },
+  ];
+
+  return (
+    <div className="app-shell">
+      <header className="app-header">
+        <button
+          className="brand"
+          onClick={() => changeView("league")}
+          aria-label="LimitLeague home"
+        >
+          <span className="brand-mark">
+            <Icon name="shield" />
+          </span>
+          <span>
+            LIMIT<span>LEAGUE</span>
+          </span>
+        </button>
+        <span className="mode-pill">
+          <i /> PAPER
+        </span>
+        <nav className="desktop-nav" aria-label="Primary navigation">
+          {navItems.map((item) => (
+            <button
+              key={item.id}
+              className={view === item.id ? "active" : ""}
+              onClick={() => changeView(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
+        <div className="header-actions">
+          <span className="market-status">
+            <i /> Strike data live
+          </span>
+          <button
+            className="tour-button"
+            onClick={() => {
+              setTourStep(0);
+              setTour(true);
+            }}
+          >
+            Judge tour
+          </button>
+          <button
+            className="primary small"
+            onClick={() => changeView("publish")}
+          >
+            <Icon name="publish" /> Publish
+          </button>
+        </div>
+      </header>
+
+      {message && (
+        <div className="toast" role="status">
+          <span>{message}</span>
+          <button onClick={() => setMessage("")} aria-label="Dismiss">
+            <Icon name="close" />
+          </button>
+        </div>
+      )}
+
+      <main className="workspace">
+        {view === "league" && (
+          <>
+            <section className="workspace-head">
+              <div>
+                <span className="kicker">SEASON 01 · PAPER LEAGUE</span>
+                <h1>
+                  Strategies ranked by <span>discipline.</span>
+                </h1>
+                <p>
+                  Inspect the limits, test the decisions, then follow under the
+                  same rules.
+                </p>
+              </div>
+              <div className="head-actions">
+                <button className="secondary" onClick={() => setTour(true)}>
+                  How it works
+                </button>
+                <button
+                  className="primary"
+                  onClick={() => changeView("publish")}
+                >
+                  Publish a strategy <Icon name="arrow" />
+                </button>
+              </div>
+            </section>
+
+            <section className="metric-strip" aria-label="League statistics">
+              <div>
+                <span>Published strategies</span>
+                <b>{strategies.length}</b>
+                <small>public limit sets</small>
+              </div>
+              <div>
+                <span>Audited decisions</span>
+                <b>{metrics.decisions}</b>
+                <small>allowed + blocked</small>
+              </div>
+              <div>
+                <span>Allowed rate</span>
+                <b>
+                  {metrics.allowedRate === null
+                    ? "—"
+                    : `${metrics.allowedRate}%`}
+                </b>
+                <small>across paper proposals</small>
+              </div>
+              <div>
+                <span>Paper follows</span>
+                <b>{metrics.followers}</b>
+                <small>same limits applied</small>
+              </div>
+            </section>
+
+            <section className="judge-path">
+              <div className="path-intro">
+                <span className="kicker">TRY IT IN 60 SECONDS</span>
+                <h2>The full proof loop</h2>
+              </div>
+              <div className="path-steps">
+                <button onClick={() => changeView("publish")}>
+                  <b>01</b>
+                  <span>
+                    <strong>Publish limits</strong>
+                    <small>Start with the prefilled risk caps.</small>
+                  </span>
+                </button>
+                <button
+                  onClick={() => strategies[0] && openStrategy(strategies[0])}
+                >
+                  <b>02</b>
+                  <span>
+                    <strong>Test a proposal</strong>
+                    <small>Watch one pass or hit a hard limit.</small>
+                  </span>
+                </button>
+                <button onClick={() => changeView("audit")}>
+                  <b>03</b>
+                  <span>
+                    <strong>Verify the record</strong>
+                    <small>See the decision and exact reason.</small>
+                  </span>
+                </button>
+              </div>
+            </section>
+
+            <div className="dashboard-grid">
+              <section className="panel league-panel">
+                <div className="panel-head">
+                  <div>
+                    <span className="kicker">DISCOVERY</span>
+                    <h2>League board</h2>
+                  </div>
+                  <span className="panel-note">
+                    Ranked by compliant paper performance
+                  </span>
+                </div>
+                {strategies.length === 0 ? (
+                  <div className="empty-state">
+                    <span className="empty-icon">
+                      <Icon name="shield" />
+                    </span>
+                    <h3>The league is ready.</h3>
+                    <p>
+                      Publish the first strategy and make its limits public.
+                    </p>
+                    <button
+                      className="primary"
+                      onClick={() => changeView("publish")}
+                    >
+                      Publish strategy
+                    </button>
+                  </div>
+                ) : (
+                  <div className="strategy-list">
+                    <div className="strategy-labels">
+                      <span>Rank / Strategy</span>
+                      <span>Paper return</span>
+                      <span>Hard limits</span>
+                      <span>Proof</span>
+                    </div>
+                    {strategies.map((strategy, index) => (
+                      <button
+                        className="strategy-row"
+                        key={strategy.id}
+                        onClick={() => openStrategy(strategy)}
+                      >
+                        <span className="rank">
+                          {String(index + 1).padStart(2, "0")}
+                        </span>
+                        <span className="strategy-main">
+                          <span className="avatar">
+                            {strategy.name[0].toUpperCase()}
+                          </span>
+                          <span>
+                            <strong>{strategy.name}</strong>
+                            <small>
+                              {strategy.paused
+                                ? "Paused"
+                                : "Compliant paper strategy"}
+                              {user?.id === strategy.owner_id ? " · Yours" : ""}
+                            </small>
+                          </span>
+                        </span>
+                        <span
+                          className={`return ${strategy.returnPct !== null && strategy.returnPct < 0 ? "negative" : ""}`}
+                        >
+                          <strong>{percent(strategy.returnPct)}</strong>
+                          <small>on risk budget</small>
+                        </span>
+                        <span className="limits-mini">
+                          <span>
+                            <small>Position</small>
+                            <b>
+                              {money(strategy.limits.maxPositionNotionalUsd)}
+                            </b>
+                          </span>
+                          <span>
+                            <small>Daily loss</small>
+                            <b>{money(strategy.limits.dailyLossLimitUsd)}</b>
+                          </span>
+                          <span>
+                            <small>Exposure</small>
+                            <b>{money(strategy.limits.maxTotalExposureUsd)}</b>
+                          </span>
+                        </span>
+                        <span className="proof">
+                          <strong>{strategy.audit_count}</strong>
+                          <small>decisions</small>
+                          <em>{strategy.followers} following</em>
+                        </span>
+                        <span className="row-arrow">
+                          <Icon name="arrow" />
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="panel recent-panel">
+                <div className="panel-head">
+                  <div>
+                    <span className="kicker">LIVE RECORD</span>
+                    <h2>Recent decisions</h2>
+                  </div>
+                  <button
+                    className="text-button"
+                    onClick={() => changeView("audit")}
+                  >
+                    Open audit <Icon name="arrow" />
+                  </button>
+                </div>
+                <div className="decision-feed">
+                  {audit.length === 0 ? (
+                    <div className="feed-empty">
+                      Proposal decisions will appear here.
+                    </div>
+                  ) : (
+                    audit.slice(0, 5).map((item) => (
+                      <button key={item.id} onClick={() => changeView("audit")}>
+                        <span
+                          className={`decision-dot ${item.event_type === "rules" ? "rules" : item.allowed ? "pass" : "stop"}`}
+                        />
+                        <span>
+                          <strong>{item.strategy_name}</strong>
+                          <small>
+                            {item.event_type === "rules"
+                              ? item.action
+                              : `${item.side?.toUpperCase()} ${item.market} · ${money(item.notional_usd ?? 0)}`}
+                          </small>
+                        </span>
+                        <em
+                          className={
+                            item.event_type === "rules"
+                              ? "rules"
+                              : item.allowed
+                                ? "pass"
+                                : "stop"
+                          }
+                        >
+                          {item.event_type === "rules"
+                            ? "RULES"
+                            : item.allowed
+                              ? "ALLOWED"
+                              : "BLOCKED"}
+                        </em>
+                      </button>
+                    ))
+                  )}
+                </div>
+                <div className="proof-note">
+                  <Icon name="shield" />
+                  <p>
+                    <strong>Public by design.</strong> Every proposal and every
+                    limit change stays attached to the strategy.
+                  </p>
+                </div>
+              </section>
+            </div>
+          </>
+        )}
+
+        {view === "audit" && (
+          <section className="page-section">
+            <div className="page-head">
+              <div>
+                <span className="kicker">PUBLIC PROOF</span>
+                <h1>Decision audit</h1>
+                <p>
+                  Every proposal, verdict, rule change, and block reason in one
+                  public record.
+                </p>
+              </div>
+              <div className="legend">
+                <span>
+                  <i className="pass" />
+                  Allowed
+                </span>
+                <span>
+                  <i className="stop" />
+                  Blocked
+                </span>
+                <span>
+                  <i className="rules" />
+                  Rules
+                </span>
+              </div>
+            </div>
+            <div className="panel audit-panel">
+              <div className="audit-header">
+                <span>Verdict</span>
+                <span>Strategy / Event</span>
+                <span>Price</span>
+                <span>Time</span>
+              </div>
+              {audit.length === 0 ? (
+                <div className="empty-state">
+                  <h3>No decisions yet.</h3>
+                  <p>Publish a strategy and test its first proposal.</p>
+                </div>
+              ) : (
+                audit.map((item) => (
+                  <div className="audit-entry" key={item.id}>
+                    <span>
+                      <em
+                        className={
+                          item.event_type === "rules"
+                            ? "rules"
+                            : item.allowed
+                              ? "pass"
+                              : "stop"
+                        }
+                      >
+                        {item.event_type === "rules"
+                          ? "RULES"
+                          : item.allowed
+                            ? "ALLOWED"
+                            : "BLOCKED"}
+                      </em>
+                    </span>
+                    <span>
+                      <strong>{item.strategy_name}</strong>
+                      <small>
+                        {item.event_type === "rules"
+                          ? item.action
+                          : `${item.side?.toUpperCase()} ${item.market} · ${money(item.notional_usd ?? 0)}`}
+                      </small>
+                      {item.event_type === "proposal" && !item.allowed && (
+                        <p>{item.reasons?.join(" ")}</p>
+                      )}
+                    </span>
+                    <span className="mono">
+                      {item.price ? money(item.price, 2) : "—"}
+                    </span>
+                    <time>{new Date(item.created_at).toLocaleString()}</time>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+        )}
+
+        {view === "publish" && (
+          <section className="page-section publish-layout">
+            <div className="publish-copy">
+              <span className="kicker">PUBLISH TO THE LEAGUE</span>
+              <h1>Declare the limits before the results.</h1>
+              <p>
+                Your strategy receives an instant paper workspace. Every
+                proposal is priced with Strike market data and checked before a
+                paper position opens.
+              </p>
+              <div className="assurance-list">
+                <span>
+                  <Icon name="check" />
+                  <b>No wallet or email required</b>
+                </span>
+                <span>
+                  <Icon name="check" />
+                  <b>Limits are public immediately</b>
+                </span>
+                <span>
+                  <Icon name="check" />
+                  <b>Limits can tighten, never loosen</b>
+                </span>
+              </div>
+            </div>
+            <form className="publish-form panel" onSubmit={onPublish}>
+              <div className="form-title">
+                <span>01</span>
+                <div>
+                  <h2>Strategy identity</h2>
+                  <p>Give judges enough context to understand the idea.</p>
+                </div>
+              </div>
+              <label>
+                Strategy name
+                <input
+                  required
+                  minLength={3}
+                  maxLength={80}
+                  value={draft.name}
+                  onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                  placeholder="e.g. BTC Momentum Guard"
+                />
+              </label>
+              <label>
+                Short description
+                <textarea
+                  required
+                  maxLength={1000}
+                  value={draft.description}
+                  onChange={(e) =>
+                    setDraft({ ...draft, description: e.target.value })
+                  }
+                  placeholder="Describe the signal and the discipline behind it."
+                />
+              </label>
+              <div className="form-title divided">
+                <span>02</span>
+                <div>
+                  <h2>Published hard limits</h2>
+                  <p>
+                    Every proposal and follower is checked against these caps.
+                  </p>
+                </div>
+              </div>
+              <div className="form-grid">
+                <label>
+                  Max position
+                  <input
+                    required
+                    type="number"
+                    min="1"
+                    value={draft.maxPositionNotionalUsd}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        maxPositionNotionalUsd: e.target.value,
+                      })
+                    }
+                  />
+                  <small>USD per market</small>
+                </label>
+                <label>
+                  Daily loss
+                  <input
+                    required
+                    type="number"
+                    min="1"
+                    value={draft.dailyLossLimitUsd}
+                    onChange={(e) =>
+                      setDraft({ ...draft, dailyLossLimitUsd: e.target.value })
+                    }
+                  />
+                  <small>USD before pause</small>
+                </label>
+                <label>
+                  Total exposure
+                  <input
+                    required
+                    type="number"
+                    min="1"
+                    value={draft.maxTotalExposureUsd}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        maxTotalExposureUsd: e.target.value,
+                      })
+                    }
+                  />
+                  <small>USD across markets</small>
+                </label>
+                <label>
+                  Open positions
+                  <input
+                    required
+                    type="number"
+                    min="1"
+                    max="100"
+                    value={draft.maxOpenPositions}
+                    onChange={(e) =>
+                      setDraft({ ...draft, maxOpenPositions: e.target.value })
+                    }
+                  />
+                  <small>Maximum at once</small>
+                </label>
+              </div>
+              <div className="publish-confirm">
+                <Icon name="shield" />
+                <span>
+                  <strong>Automatic pause enabled</strong>
+                  <small>
+                    New proposals stop when the daily loss limit is reached.
+                  </small>
+                </span>
+              </div>
+              <button disabled={busy} className="primary wide">
+                {busy ? "Publishing…" : "Publish strategy"}
+                <Icon name="arrow" />
+              </button>
+            </form>
+          </section>
+        )}
+      </main>
+
+      <nav className="mobile-nav" aria-label="Mobile navigation">
+        {navItems.map((item) => (
+          <button
+            key={item.id}
+            className={view === item.id ? "active" : ""}
+            onClick={() => changeView(item.id)}
+          >
+            <Icon name={item.icon} />
+            <span>{item.label}</span>
+          </button>
+        ))}
+      </nav>
+
+      {selected && (
+        <div
+          className="overlay"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setSelected(null);
+          }}
+        >
+          <section
+            className="drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${selected.name} strategy`}
+          >
+            <button
+              className="drawer-close"
+              onClick={() => setSelected(null)}
+              aria-label="Close strategy"
+            >
+              <Icon name="close" />
+            </button>
+            <div className="drawer-top">
+              <span
+                className={`status-badge ${selected.paused ? "paused" : ""}`}
+              >
+                <i />
+                {selected.paused ? "PAUSED" : "PAPER · COMPLIANT"}
+              </span>
+              {user?.id === selected.owner_id && (
+                <span className="owner-badge">YOUR STRATEGY</span>
+              )}
+            </div>
+            <h2>{selected.name}</h2>
+            <p className="drawer-description">
+              {selected.description ||
+                "Published limits and a public decision record."}
+            </p>
+            <div className="drawer-performance">
+              <div>
+                <span>Paper return</span>
+                <b>{percent(selected.returnPct)}</b>
+              </div>
+              <div>
+                <span>Decisions</span>
+                <b>{selected.audit_count}</b>
+              </div>
+              <div>
+                <span>Followers</span>
+                <b>{selected.followers}</b>
+              </div>
+            </div>
+            <div className="limit-box">
+              <div className="limit-title">
+                <span>Published hard limits</span>
+                <small>Applied before every proposal</small>
+              </div>
+              <div className="limit-grid">
+                <div>
+                  <small>Max position</small>
+                  <b>{money(selected.limits.maxPositionNotionalUsd)}</b>
+                </div>
+                <div>
+                  <small>Daily loss</small>
+                  <b>{money(selected.limits.dailyLossLimitUsd)}</b>
+                </div>
+                <div>
+                  <small>Total exposure</small>
+                  <b>{money(selected.limits.maxTotalExposureUsd)}</b>
+                </div>
+                <div>
+                  <small>Open positions</small>
+                  <b>{selected.limits.maxOpenPositions}</b>
+                </div>
+              </div>
+            </div>
+            <div className="drawer-actions">
+              <button
+                className="primary"
+                disabled={
+                  busy || user?.id === selected.owner_id || selected.following
+                }
+                onClick={() => void onFollow(selected)}
+              >
+                {user?.id === selected.owner_id
+                  ? "Your paper strategy"
+                  : selected.following
+                    ? "Following in paper"
+                    : "Paper follow"}
+                <Icon name="arrow" />
+              </button>
+              <button
+                className="secondary"
+                onClick={() => {
+                  setSelected(null);
+                  changeView("audit");
+                }}
+              >
+                View public audit
+              </button>
+            </div>
+            {user?.id === selected.owner_id && (
+              <>
+                <form className="proposal-card" onSubmit={onProposal}>
+                  <div className="form-title">
+                    <span>TEST</span>
+                    <div>
+                      <h3>Submit a paper proposal</h3>
+                      <p>Strike prices it. The checker decides.</p>
+                    </div>
+                  </div>
+                  <div className="form-grid compact">
+                    <label>
+                      Market
+                      <select
+                        value={proposal.market}
+                        onChange={(e) =>
+                          setProposal({ ...proposal, market: e.target.value })
+                        }
+                      >
+                        <option>BTC-USD</option>
+                        <option>ETH-USD</option>
+                        <option>SOL-USD</option>
+                        <option>ADA-USD</option>
+                      </select>
+                    </label>
+                    <label>
+                      Side
+                      <select
+                        value={proposal.side}
+                        onChange={(e) =>
+                          setProposal({ ...proposal, side: e.target.value })
+                        }
+                      >
+                        <option value="long">Long</option>
+                        <option value="short">Short</option>
+                      </select>
+                    </label>
+                  </div>
+                  <label>
+                    Notional (USD)
+                    <input
+                      required
+                      type="number"
+                      min="1"
+                      value={proposal.notionalUsd}
+                      onChange={(e) =>
+                        setProposal({
+                          ...proposal,
+                          notionalUsd: e.target.value,
+                        })
+                      }
+                    />
+                  </label>
+                  <label>
+                    Reason
+                    <input
+                      required
+                      maxLength={500}
+                      value={proposal.reason}
+                      onChange={(e) =>
+                        setProposal({ ...proposal, reason: e.target.value })
+                      }
+                    />
+                  </label>
+                  <button
+                    className="primary wide"
+                    disabled={busy || selected.paused}
+                  >
+                    {selected.paused ? "Strategy paused" : "Check proposal"}
+                    <Icon name="arrow" />
+                  </button>
+                  {result && (
+                    <div
+                      className={`decision-result ${result.allowed ? "pass" : "stop"}`}
+                    >
+                      <span className="result-icon">
+                        <Icon name={result.allowed ? "check" : "close"} />
+                      </span>
+                      <div>
+                        <strong>
+                          {result.allowed ? "ALLOWED" : "BLOCKED"} ·{" "}
+                          {money(result.price, 2)}
+                        </strong>
+                        <p>
+                          {result.allowed
+                            ? "Every published limit passed."
+                            : result.reasons.join(" ")}
+                        </p>
+                        <div>
+                          <span>
+                            Position{" "}
+                            <b>
+                              {money(result.after.positionNotionalUsd)} /{" "}
+                              {money(selected.limits.maxPositionNotionalUsd)}
+                            </b>
+                          </span>
+                          <span>
+                            Exposure{" "}
+                            <b>
+                              {money(result.after.totalExposureUsd)} /{" "}
+                              {money(selected.limits.maxTotalExposureUsd)}
+                            </b>
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </form>
+                <details className="risk-controls">
+                  <summary>
+                    Strategy controls <span>Pause or tighten limits</span>
+                  </summary>
+                  <div className="pause-row">
+                    <div>
+                      <strong>
+                        {selected.paused
+                          ? "Strategy is paused"
+                          : "Immediate pause"}
+                      </strong>
+                      <p>Stop every new proposal under this strategy.</p>
+                    </div>
+                    <button
+                      className="secondary"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void onPause()}
+                    >
+                      {selected.paused ? "Resume" : "Pause strategy"}
+                    </button>
+                  </div>
+                  <form onSubmit={onTighten}>
+                    <h3>Tighten published limits</h3>
+                    <p>
+                      Values may move down. The change is added to the public
+                      audit.
+                    </p>
+                    <div className="form-grid compact">
+                      <label>
+                        Max position
+                        <input
+                          required
+                          type="number"
+                          min="1"
+                          max={selected.limits.maxPositionNotionalUsd}
+                          value={tighten.maxPositionNotionalUsd}
+                          onChange={(e) =>
+                            setTighten({
+                              ...tighten,
+                              maxPositionNotionalUsd: e.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        Daily loss
+                        <input
+                          required
+                          type="number"
+                          min="1"
+                          max={selected.limits.dailyLossLimitUsd}
+                          value={tighten.dailyLossLimitUsd}
+                          onChange={(e) =>
+                            setTighten({
+                              ...tighten,
+                              dailyLossLimitUsd: e.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        Total exposure
+                        <input
+                          required
+                          type="number"
+                          min="1"
+                          max={selected.limits.maxTotalExposureUsd}
+                          value={tighten.maxTotalExposureUsd}
+                          onChange={(e) =>
+                            setTighten({
+                              ...tighten,
+                              maxTotalExposureUsd: e.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        Open positions
+                        <input
+                          required
+                          type="number"
+                          min="1"
+                          max={selected.limits.maxOpenPositions}
+                          value={tighten.maxOpenPositions}
+                          onChange={(e) =>
+                            setTighten({
+                              ...tighten,
+                              maxOpenPositions: e.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                    </div>
+                    <button className="secondary" disabled={busy}>
+                      Publish tighter limits
+                    </button>
+                  </form>
+                </details>
+              </>
+            )}
+          </section>
+        </div>
+      )}
+
+      {tour && (
+        <div className="tour-overlay">
+          <section
+            className="tour-card"
+            role="dialog"
+            aria-modal="true"
+            aria-label="LimitLeague judge tour"
+          >
+            <div className="tour-progress">
+              <span>{tourStep + 1} / 3</span>
+              <button onClick={() => finishTour()} aria-label="Close tour">
+                Skip tour
+              </button>
+            </div>
+            {tourStep === 0 && (
+              <>
+                <span className="tour-icon">
+                  <Icon name="shield" />
+                </span>
+                <h2>Risk rules come first.</h2>
+                <p>
+                  Every strategy publishes hard limits before it builds a
+                  record. No email and no wallet are required in the paper
+                  league.
+                </p>
+              </>
+            )}
+            {tourStep === 1 && (
+              <>
+                <span className="tour-icon">
+                  <Icon name="publish" />
+                </span>
+                <h2>Test the enforcement.</h2>
+                <p>
+                  Publish with the prefilled limits, open your strategy, and
+                  submit a proposal. Try $100 to pass, then $2,100 to hit the
+                  $2,000 position cap.
+                </p>
+              </>
+            )}
+            {tourStep === 2 && (
+              <>
+                <span className="tour-icon">
+                  <Icon name="audit" />
+                </span>
+                <h2>Verify every decision.</h2>
+                <p>
+                  The public audit shows allowed and blocked proposals with the
+                  exact reason. Followers receive the same checks on their own
+                  paper portfolios.
+                </p>
+              </>
+            )}
+            <div className="tour-dots">
+              {[0, 1, 2].map((index) => (
+                <i key={index} className={index === tourStep ? "active" : ""} />
+              ))}
+            </div>
+            <div className="tour-actions">
+              {tourStep > 0 && (
+                <button
+                  className="secondary"
+                  onClick={() => setTourStep(tourStep - 1)}
+                >
+                  Back
+                </button>
+              )}
+              <button
+                className="primary"
+                onClick={() =>
+                  tourStep < 2 ? setTourStep(tourStep + 1) : finishTour(true)
+                }
+              >
+                {tourStep < 2 ? "Next" : "Publish a strategy"}
+                <Icon name="arrow" />
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+    </div>
+  );
 }

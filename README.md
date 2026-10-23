@@ -41,7 +41,7 @@ The deterministic checker evaluates maximum position notional, total open exposu
 
 ## Use the platform
 
-1. **Create an account** at [limitleague.vercel.app](https://limitleague.vercel.app).
+1. **Open the paper league** at [limitleague.vercel.app](https://limitleague.vercel.app). Your private paper session starts automatically.
 2. **Publish a strategy** with a name, description, and hard limits.
 3. **Submit a paper trade proposal.** LimitLeague gets the current Strike price, checks the rules, and records the decision.
 4. **Inspect the audit trail** to see allowed and blocked decisions and rule changes.
@@ -85,6 +85,6 @@ The tests cover limit decisions. With `DATABASE_URL` set, the integration test a
 
 ## Architecture
 
-The app uses Next.js and React for the interface and API routes, PostgreSQL for durable state, and a deterministic TypeScript limit checker as the source of truth for proposal decisions. Authentication uses hashed passwords and HTTP-only session cookies. Strike's public API supplies prices; its authenticated API wallet client is isolated on the server.
+The app uses Next.js and React for the interface and API routes, PostgreSQL for durable state, and a deterministic TypeScript limit checker as the source of truth for proposal decisions. Anonymous paper workspaces use private HTTP-only session cookies, so judges can start immediately without an email flow. Strike's public API supplies prices; its authenticated API wallet client is isolated on the server.
 
 LimitLeague was created for the Strike Hackathon.
