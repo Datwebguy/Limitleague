@@ -1,34 +1,90 @@
-# LimitLeague
+<div align="center">
 
-LimitLeague is a seasonal strategy discovery and following product built on Strike Finance.
+![LimitLeague — prove the discipline](./public/readme-banner.svg)
 
-Users publish strategies that run under hard, publicly declared risk limits. The ranking only counts performance that stayed inside those limits. Anyone can inspect the full audit trail, paper-follow a strategy under the same rules, or promote it to live.
+**Discover strategies by the rules they keep.**
 
-This is a Strike Hackathon submission.
+[Open the app](https://limitleague.vercel.app) · [Explore Strike Finance](https://www.strikefinance.org) · [Strike API docs](https://docs.strikefinance.org/api/getting-started)
 
-## Current implementation
+</div>
 
-The repository contains a Next.js application with account creation, strategy publishing, public limits and audit records, paper following, live Strike market prices, and a Postgres-backed paper trading gate. The discovery board shows actual paper returns when a strategy has trades. Live order submission is disabled until separate Strike accounts and a replacement API-wallet secret are configured. See [RUNBOOK.md](RUNBOOK.md) for setup and the exact activation requirements.
+## Why LimitLeague
 
-## What it does
-- Publish a strategy with explicit hard limits (position size, daily loss, total exposure, max open positions, pause conditions).
-- Every proposed trade is checked against the published limits before it can execute on Strike.
-- Public leaderboard ranks only compliant performance.
-- Full audit log of allowed vs blocked trades with reasons.
-- Paper-follow or live-follow any strategy; the same limits apply to the follower.
+A return tells you what happened. It does not tell you how much risk a strategy took to get there. LimitLeague puts the risk contract first: every strategy publishes hard limits, and every paper trade proposal receives an allow or block decision against those limits. The strategy's record is public, so people can inspect its discipline before following it.
 
-## Live links
-- App: [https://app.strikefinance.org](https://app.strikefinance.org)
-- Docs: [https://docs.strikefinance.org](https://docs.strikefinance.org)
+LimitLeague is built for the Strike Finance ecosystem and uses live Strike market prices to mark paper positions.
 
-## Key Strike resources
-- API Getting Started: [https://docs.strikefinance.org/api/getting-started](https://docs.strikefinance.org/api/getting-started)
-- Copy Trading: [https://docs.strikefinance.org/perpetuals/copy-trading](https://docs.strikefinance.org/perpetuals/copy-trading)
-- Copy Trader Discovery: [https://docs.strikefinance.org/api/copy-trading/copy-trader-discovery-public](https://docs.strikefinance.org/api/copy-trading/copy-trader-discovery-public)
-- Skills: [https://github.com/strike-finance/strike-finance-skills](https://github.com/strike-finance/strike-finance-skills)
+## What you can do
 
-## Strike GitHub
-- Organization: [https://github.com/strike-finance](https://github.com/strike-finance)
-- Perpetuals contracts: [https://github.com/strike-finance/perpetuals-smart-contracts](https://github.com/strike-finance/perpetuals-smart-contracts)
-- Skills: [https://github.com/strike-finance/strike-finance-skills](https://github.com/strike-finance/strike-finance-skills)
-- Hermes skill: [https://github.com/strike-finance/strike-finance-hermes-skill](https://github.com/strike-finance/strike-finance-hermes-skill)
+| Explore | Publish | Follow |
+| --- | --- | --- |
+| Compare public strategies, limits, paper returns, follower counts, and decision histories. | Set caps for position size, daily loss, total exposure, and open positions. Pause immediately or tighten limits with a public record of the change. | Paper-follow a strategy. Each proposal is checked against **your own** paper portfolio under the strategy's published limits. |
+
+The public audit trail records allowed and blocked proposals with their reasons. Performance shown in the app is paper performance derived from positions and current Strike prices; a strategy with no trades shows no return.
+
+## How it works
+
+```mermaid
+flowchart LR
+    A[Publish strategy and limits] --> B[Submit trade proposal]
+    B --> C[Read paper portfolio and Strike price]
+    C --> D{Check every limit}
+    D -->|Allowed| E[Open paper position]
+    D -->|Blocked| F[Record reason]
+    E --> G[Public audit and discovery]
+    F --> G
+    B --> H[Follower portfolios]
+    H --> D
+```
+
+The deterministic checker evaluates maximum position notional, total open exposure, number of open positions, daily loss, and pause state. The same proposal may be allowed for the publisher and blocked for a follower because their portfolios differ. Pauses take effect immediately; published limits can only be tightened.
+
+## Use the platform
+
+1. **Create an account** at [limitleague.vercel.app](https://limitleague.vercel.app).
+2. **Publish a strategy** with a name, description, and hard limits.
+3. **Submit a paper trade proposal.** LimitLeague gets the current Strike price, checks the rules, and records the decision.
+4. **Inspect the audit trail** to see allowed and blocked decisions and rule changes.
+5. **Paper-follow a strategy** to apply its published limits to your own paper portfolio.
+
+## Run locally
+
+Requirements: Node.js 22+, PostgreSQL, and network access to the Strike Finance API.
+
+```bash
+git clone https://github.com/Datwebguy/Limitleague.git
+cd Limitleague
+npm ci
+cp .env.example .env.local
+```
+
+Set `DATABASE_URL` in `.env.local` to a PostgreSQL connection string, then run:
+
+```bash
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000). Database tables are created on first use. The public Strike price feed works without an API wallet.
+
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | Persistent PostgreSQL connection for users, sessions, strategies, positions, and audit records. |
+| `STRIKE_API_BASE_URL` | Strike API origin; defaults to `https://api.strikefinance.org`. |
+| `STRIKE_API_WALLET_PUBLIC_KEY` | Server-side Strike API wallet public key for authenticated Strike requests. |
+| `STRIKE_API_WALLET_PRIVATE_KEY` | Server-side signing key. Keep it in your hosting provider's secret store; never commit it. |
+
+## Checks
+
+```bash
+npm run typecheck
+npm test
+npm run build
+```
+
+The tests cover limit decisions. With `DATABASE_URL` set, the integration test also exercises PostgreSQL, the public Strike price feed, follower checks, and the audit trail.
+
+## Architecture
+
+The app uses Next.js and React for the interface and API routes, PostgreSQL for durable state, and a deterministic TypeScript limit checker as the source of truth for proposal decisions. Authentication uses hashed passwords and HTTP-only session cookies. Strike's public API supplies prices; its authenticated API wallet client is isolated on the server.
+
+LimitLeague was created for the Strike Hackathon.
