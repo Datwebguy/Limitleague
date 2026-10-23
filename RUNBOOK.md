@@ -1,46 +1,42 @@
 # Running LimitLeague
 
-## Local setup
+## What works
+
+Users can create an account, publish a strategy with public hard limits, paper-follow it, and submit proposals. Each proposal uses the latest Strike production market price. The checker evaluates the owner and every follower independently before a paper position is opened. Allowed and blocked decisions are stored in Postgres. The discovery board calculates paper returns from open positions and current Strike prices. No sample strategy or performance is seeded.
+
+## Required services
+
+- Node.js 22 or later
+- PostgreSQL with a persistent `DATABASE_URL`
+- Network access to `https://api.strikefinance.org`
+
+The database schema is created on first request. For Vercel, connect a Neon Postgres database and set `DATABASE_URL` for Production, Preview, and Development. The app cannot operate without it.
+
+## Local start
 
 ```bash
-npm install
+npm ci
 cp .env.example .env.local
+npm run build
 npm run dev
 ```
 
-Open `http://localhost:3000`. The initial strategy is configured in paper mode.
+Set `DATABASE_URL` in `.env.local` before starting. `npm test` runs the limit-checker tests. With `DATABASE_URL` set, it also runs a database and live-price integration test.
 
-## Proposal gate
+## Strike API wallet
 
-`POST /api/proposals` accepts:
+An API wallet is a separate Ed25519 key pair registered at [Strike API Wallets](https://app.strikefinance.org/api-keys). It can read an account and place trades but cannot withdraw. Authenticated requests sign:
 
-```json
-{
-  "strategyId": "northstar",
-  "market": "BTC-USD",
-  "side": "long",
-  "notionalUsd": 1500,
-  "reason": "Published strategy signal"
-}
+```text
+METHOD:PATH:UNIX_TIMESTAMP:NONCE:SHA256_OF_EXACT_JSON_BODY
 ```
 
-The endpoint always invokes `lib/limit-checker.ts` before recording an audit event. A blocked proposal never reaches the Strike order executor.
+The app implements this signature in `lib/strike/client.ts` and has verified a read-only authenticated account request against Strike production. Keep the private key as a server-side secret. The key shared in chat during development should be revoked and replaced before use.
 
-- `GET /api/strategies` lists published strategies and their hard limits.
-- `GET /api/audit` returns recorded allow/block decisions for the current service instance.
+Live order submission is disabled. Before enabling it, a published strategy must be bound to an isolated Strike account or sub-account; each follower must authorize their own account; the service must reconcile positions and daily PnL from Strike immediately before submission; and the signed order must pass the same deterministic limit check. A paper audit entry is never evidence of a live fill.
 
-## Strike activation
+Strike account APIs support Cardano, Ethereum, and Solana wallet identities. Strike sub-accounts can separate strategy balances, positions, and risk budgets.
 
-The project intentionally has no configured wallet or live order endpoint. Before enabling live execution:
+## Deployment
 
-1. Add a durable database adapter for strategy, portfolio, and audit data.
-2. Provide API Wallet signing through a server-side secret provider.
-3. Fetch and reconcile portfolio state from Strike before each proposal.
-4. Invoke `submitAllowedOrder` only after `checkLimits` returns `allowed: true`.
-5. Keep API-wallet keys out of client-side code and do not add withdrawal authority.
-
-Run the logic tests with:
-
-```bash
-npm test
-```
+The intended target is Vercel, linked to `Datwebguy/Limitleague`. Add a Neon Postgres integration, then set and verify `DATABASE_URL`. The public Strike price feed needs no API wallet. Add API-wallet secrets only after rotation and a live execution review. The previous private ChatGPT-hosted prototype is not part of this deployment.

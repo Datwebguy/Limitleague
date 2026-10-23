@@ -1,5 +1,6 @@
-import { listAuditEntries } from "@/lib/strategy-store";
-
+import { listAudit } from "@/lib/platform";
+export const runtime = "nodejs";
 export async function GET() {
-  return Response.json({ audit: listAuditEntries() });
+  try { return Response.json({ audit: await listAudit() }); }
+  catch { return Response.json({ error: "Audit data is unavailable." }, { status: 503 }); }
 }

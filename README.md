@@ -6,6 +6,10 @@ Users publish strategies that run under hard, publicly declared risk limits. The
 
 This is a Strike Hackathon submission.
 
+## Current implementation
+
+The repository contains a Next.js application with account creation, strategy publishing, public limits and audit records, paper following, live Strike market prices, and a Postgres-backed paper trading gate. The discovery board shows actual paper returns when a strategy has trades. Live order submission is disabled until separate Strike accounts and a replacement API-wallet secret are configured. See [RUNBOOK.md](RUNBOOK.md) for setup and the exact activation requirements.
+
 ## What it does
 - Publish a strategy with explicit hard limits (position size, daily loss, total exposure, max open positions, pause conditions).
 - Every proposed trade is checked against the published limits before it can execute on Strike.
