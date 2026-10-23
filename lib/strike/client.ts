@@ -122,6 +122,21 @@ export type StrikePublicFill = {
   timestamp: number;
 };
 
+export type StrikePublicOrder = {
+  ID?: number;
+  id?: number;
+  Symbol?: string;
+  symbol?: string;
+  Side?: "buy" | "sell";
+  side?: "buy" | "sell";
+  Size?: string;
+  size?: string;
+  Status?: string;
+  status?: string;
+  ClientOrderID?: string;
+  client_order_id?: string;
+};
+
 export async function getStrikePublicAccount(accountId: string): Promise<StrikePublicAccount> {
   return publicStrikeRequest("/v2/account", { account_id: accountId });
 }
@@ -138,6 +153,14 @@ export async function getStrikePublicFills(accountId: string, startTime: number)
     limit: "1000",
   }) as { fills?: StrikePublicFill[] };
   return result.fills ?? [];
+}
+
+export async function getStrikePublicOrder(accountId: string, symbol: string, orderId: number): Promise<StrikePublicOrder> {
+  return publicStrikeRequest("/v2/order", {
+    account_id: accountId,
+    symbol,
+    order_id: String(orderId),
+  });
 }
 
 export type StrikeAuthProof = {

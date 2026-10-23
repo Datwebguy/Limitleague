@@ -2,7 +2,7 @@ import type { PoolClient } from "pg";
 import { createHash, randomUUID } from "node:crypto";
 import { db, initializeDatabase } from "./db";
 import { checkLimits } from "./limit-checker";
-import { getStrikeDayOpen, getStrikePrice, getStrikePublicAccount, getStrikePublicFills, getStrikePublicPositions } from "./strike/client";
+import { getStrikeDayOpen, getStrikePrice, getStrikePublicAccount, getStrikePublicFills, getStrikePublicOrder, getStrikePublicPositions } from "./strike/client";
 import type { HardLimits, PortfolioState, TradeProposal } from "./types";
 
 export type StrategyRow = {
@@ -575,13 +575,38 @@ export async function recordLiveExecution(
   strikeResponse: unknown,
 ) {
   await initializeDatabase();
-  const snapshot = { accepted, strikeResponse, recordedAt: new Date().toISOString() };
+  const found = await db().query(
+    `SELECT id,market,side,notional_usd::float AS notional_usd,price::float AS price,portfolio_snapshot
+     FROM audit_events WHERE id=$1 AND user_id=$2 AND mode='live' AND execution_snapshot IS NULL`,
+    [auditId, userId],
+  );
+  if (!found.rowCount) throw new Error("Live audit record was not found or already finalized.");
+  const event = found.rows[0];
+  let verifiedResponse = strikeResponse;
+  if (accepted) {
+    const supplied = (strikeResponse && typeof strikeResponse === "object" ? strikeResponse : {}) as Record<string, unknown>;
+    const orderId = Number(supplied.ID ?? supplied.id ?? supplied.order_id);
+    const accountId = String(event.portfolio_snapshot?.accountId ?? "");
+    if (!Number.isSafeInteger(orderId) || !accountId) throw new Error("Strike order confirmation is incomplete.");
+    const order = await getStrikePublicOrder(accountId, event.market, orderId);
+    const symbol = order.Symbol ?? order.symbol;
+    const side = order.Side ?? order.side;
+    const size = Number(order.Size ?? order.size);
+    const expectedSide = event.side === "long" ? "buy" : "sell";
+    if (symbol !== event.market || side !== expectedSide || !Number.isFinite(size) || size <= 0)
+      throw new Error("Strike order does not match the checked proposal.");
+    const executedNotional = size * event.price;
+    if (executedNotional > event.notional_usd * 1.001)
+      throw new Error("Strike order size exceeds the checked proposal.");
+    verifiedResponse = order;
+  }
+  const snapshot = { accepted, strikeResponse: verifiedResponse, verifiedByStrike: accepted, recordedAt: new Date().toISOString() };
   const result = await db().query(
     `UPDATE audit_events SET execution_snapshot=$3
      WHERE id=$1 AND user_id=$2 AND mode='live' AND execution_snapshot IS NULL
      RETURNING id`,
     [auditId, userId, JSON.stringify(snapshot)],
   );
-  if (!result.rowCount) throw new Error("Live audit record was not found or already finalized.");
+  if (!result.rowCount) throw new Error("Live audit record was already finalized.");
   return snapshot;
 }
