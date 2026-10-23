@@ -17,3 +17,9 @@
 ## Skills & tooling
 ```bash
 npx strike-finance-skills install
+```
+
+## Strike GitHub organization and key repos
+- Org: [https://github.com/strike-finance](https://github.com/strike-finance)
+- Perpetuals smart contracts: [https://github.com/strike-finance/perpetuals-smart-contracts](https://github.com/strike-finance/perpetuals-smart-contracts)
+- Builder reference: [https://github.com/strike-finance/strike-builder-reference](https://github.com/strike-finance/strike-builder-reference)
