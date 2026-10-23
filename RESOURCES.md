@@ -23,3 +23,7 @@ npx strike-finance-skills install
 - Org: [https://github.com/strike-finance](https://github.com/strike-finance)
 - Perpetuals smart contracts: [https://github.com/strike-finance/perpetuals-smart-contracts](https://github.com/strike-finance/perpetuals-smart-contracts)
 - Builder reference: [https://github.com/strike-finance/strike-builder-reference](https://github.com/strike-finance/strike-builder-reference)
+
+## Hackathon
+- Announcement: [https://medium.com/@strikecardano/strike-hackathon-starts-this-wednesday-3-000-in-prizes-158a029d655e](https://medium.com/@strikecardano/strike-hackathon-starts-this-wednesday-3-000-in-prizes-158a029d655e)
+- X announcement: [https://x.com/strikeperps/status/2111893313099829719](https://x.com/strikeperps/status/2111893313099829719)
