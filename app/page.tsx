@@ -743,7 +743,7 @@ export default function Home() {
                 <span className="kicker">YOUR PAPER WALLET</span>
                 <h1>Trade the league with pUSD.</h1>
                 <p>
-                  Every browser receives one persisted 10,000 pUSD allocation. It is virtual trading credit; fills and marks come from Strike Finance live market data.
+                  Every browser receives one persisted {portfolio ? money(portfolio.startingBalanceUsd, 0) : "funded"} pUSD allocation. It is virtual trading credit; fills and marks come from Strike Finance live market data.
                 </p>
               </div>
               <span className="source-chip"><i /> Strike marks live</span>
@@ -1416,8 +1416,8 @@ export default function Home() {
                 <h2>Test the enforcement.</h2>
                 <p>
                   Publish with the prefilled limits, open your strategy, and
-                  submit a proposal. Try $100 to pass, then $2,100 to hit the
-                  $2,000 position cap.
+                  submit a proposal. Enter an amount inside the published cap,
+                  then go above it to see the checker block the order.
                 </p>
               </>
             )}
