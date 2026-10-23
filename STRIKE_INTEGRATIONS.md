@@ -33,3 +33,13 @@ API wallets can trade but cannot withdraw.
 Install Strike agent skills:
 ```bash
 npx strike-finance-skills install
+```
+
+Repo: [https://github.com/strike-finance/strike-finance-skills](https://github.com/strike-finance/strike-finance-skills)
+
+## Related Strike GitHub repos
+- [https://github.com/strike-finance](https://github.com/strike-finance)
+- [https://github.com/strike-finance/perpetuals-smart-contracts](https://github.com/strike-finance/perpetuals-smart-contracts)
+- [https://github.com/strike-finance/strike-finance-skills](https://github.com/strike-finance/strike-finance-skills)
+- [https://github.com/strike-finance/strike-finance-hermes-skill](https://github.com/strike-finance/strike-finance-hermes-skill)
+- [https://github.com/strike-finance/strike-builder-reference](https://github.com/strike-finance/strike-builder-reference)
