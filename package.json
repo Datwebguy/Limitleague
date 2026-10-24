@@ -2,6 +2,7 @@
   "name": "limitleague",
   "private": true,
   "version": "0.1.0",
+  "description": "Paper-first strategy discovery and following on Strike Finance with public hard-limit audits.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
