@@ -44,7 +44,7 @@ const standing = async (strategyId: string) => (await listStrategies()).find((it
 test("a paper proposal is checked, copied to followers, and audited", { skip }, async () => {
   const owner = await makeUser();
   const follower = await makeUser();
-  const strategy = await createStrategy(owner, "Integration Strategy", "Test", { ...limits, maxPositionNotionalUsd: 200, dailyLossLimitUsd: 50, maxTotalExposureUsd: 300, maxOpenPositions: 1 });
+  const strategy = await createStrategy(owner, "Integration Strategy", "Test", { ...limits, maxPositionNotionalUsd: 200, dailyLossLimitUsd: 50, maxTotalExposureUsd: 300, maxOpenPositions: 1 }, btc);
   await followStrategy(follower, strategy.id);
   const allowed = await propose(owner, strategy.id, 100);
   assert.equal(allowed.ownerDecision?.decision.allowed, true);
@@ -54,7 +54,7 @@ test("a paper proposal is checked, copied to followers, and audited", { skip }, 
   const { audit } = await listAudit({ strategyId: strategy.id });
   assert.ok(audit.some((event) => event.allowed === true));
   assert.ok(audit.some((event) => event.allowed === false));
-  await assert.rejects(() => updateStrategy(owner, strategy.id, { limits: { ...strategy.limits, maxTotalExposureUsd: 400 } }), /only be tightened/);
+  await assert.rejects(() => updateStrategy(owner, strategy.id, { limits: { ...strategy.limits, maxTotalExposureUsd: 400 } }), /never relaxed/);
   await updateStrategy(owner, strategy.id, { paused: true });
   const paused = await propose(owner, strategy.id, 10);
   assert.equal(paused.ownerDecision?.decision.allowed, false);
@@ -162,7 +162,7 @@ test("unknown markets and sub-minimum orders are refused up front", { skip }, as
   await assert.rejects(() => propose(owner, strategy.id, 0.0001), /minimum order/);
   await assert.rejects(() => proposeTrade(owner, { strategyId: strategy.id, market: "NOPE-ZZZ", side: "long", notionalUsd: 100, reason: "x" }), /not a market currently trading/);
   const stranger = await makeUser();
-  await assert.rejects(() => propose(stranger, strategy.id, 100), /Only the strategy owner/);
+  await assert.rejects(() => propose(stranger, strategy.id, 100), /strategy's owner/);
 });
 
 test("adding to a position keeps its exit percentages", { skip }, async () => {

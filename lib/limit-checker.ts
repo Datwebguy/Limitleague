@@ -20,11 +20,11 @@ export function checkLimits(
     dailyLossUsd
   };
   const reasons: string[] = [];
-  if (!validSize) reasons.push("Notional must be a positive finite number.");
-  if (!Number.isFinite(portfolio.dailyPnlUsd) || portfolio.openPositions.some((position) => !Number.isFinite(position.notionalUsd) || position.notionalUsd < 0)) reasons.push("Portfolio state is invalid.");
-  if (after.positionNotionalUsd > limits.maxPositionNotionalUsd) reasons.push("Max position size would be exceeded.");
-  if (after.totalExposureUsd > limits.maxTotalExposureUsd) reasons.push("Max total exposure would be exceeded.");
-  if (after.openPositionCount > limits.maxOpenPositions) reasons.push("Max open positions would be exceeded.");
-  if (dailyLossUsd >= limits.dailyLossLimitUsd) reasons.push("Strategy is paused because the daily loss limit has been reached.");
+  if (!validSize) reasons.push("The trade size must be more than zero.");
+  if (!Number.isFinite(portfolio.dailyPnlUsd) || portfolio.openPositions.some((position) => !Number.isFinite(position.notionalUsd) || position.notionalUsd < 0)) reasons.push("Account figures could not be read, so the trade was stopped to be safe.");
+  if (after.positionNotionalUsd > limits.maxPositionNotionalUsd) reasons.push("This trade would take the position above the strategy's size limit.");
+  if (after.totalExposureUsd > limits.maxTotalExposureUsd) reasons.push("This trade would put more money in the market than the strategy allows.");
+  if (after.openPositionCount > limits.maxOpenPositions) reasons.push("This trade would open more positions than the strategy allows.");
+  if (dailyLossUsd >= limits.dailyLossLimitUsd) reasons.push("The daily loss limit has been reached, so the strategy is paused for today.");
   return { allowed: reasons.length === 0, reasons, after };
 }

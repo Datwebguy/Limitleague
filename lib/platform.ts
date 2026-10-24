@@ -217,7 +217,7 @@ export async function createStrategy(
   name: string,
   description: string,
   limits: HardLimits,
-  config: StrategyConfig = { market: "BTC-USD", style: "momentum", takeProfitPct: null, stopLossPct: null },
+  config: StrategyConfig,
 ) {
   await initializeDatabase();
   if (!(await getStrikeMarket(config.market)))
@@ -244,7 +244,7 @@ export async function updateStrategy(
     const strategy = found.rows[0] as StrategyRow;
     const limits = requested.limits ?? strategy.limits;
     for (const key of ["maxPositionNotionalUsd", "dailyLossLimitUsd", "maxTotalExposureUsd", "maxOpenPositions"] as const) {
-      if (limits[key] > strategy.limits[key]) throw new UserError("Published limits can only be tightened.");
+      if (limits[key] > strategy.limits[key]) throw new UserError("Limits can be made stricter but never relaxed.");
     }
     const paused = requested.paused ?? strategy.paused;
     const action = requested.limits ? "Limits tightened" : paused ? "Strategy paused" : "Strategy resumed";
@@ -322,7 +322,7 @@ export async function getAuditEvent(id: string, viewerId?: string) {
      WHERE a.id=$1 AND (a.user_id=s.owner_id OR a.user_id=$2::uuid)`,
     [id, viewerId ?? null],
   );
-  if (!result.rowCount) throw new UserError("Audit record not found.", 404);
+  if (!result.rowCount) throw new UserError("Record not found.", 404);
   return result.rows[0];
 }
 
@@ -442,7 +442,7 @@ async function realizePosition(
   await client.query(
     `INSERT INTO paper_ledger(id,user_id,event_type,amount,daily_amount,balance_after,description,reference_id)
      VALUES($1,$2,'realized_pnl',$3,$4,$5,$6,$7)`,
-    [ledgerId, input.userId, pnl, dailyAmount, account.rows[0].cash_balance, `${input.label}: ${input.side.toUpperCase()} ${input.market} closed at ${input.exitPrice}`, input.strategyId],
+    [ledgerId, input.userId, pnl, dailyAmount, account.rows[0].cash_balance, `${input.label}: closed ${input.side} ${input.market} at $${input.exitPrice.toLocaleString("en-US", { maximumFractionDigits: 4 })}`, input.strategyId],
   );
   await insertAuditEvent(client, {
     strategyId: input.strategyId,
@@ -559,7 +559,7 @@ export async function getPaperPortfolio(userId: string) {
       [userId],
     ),
   ]);
-  if (!account.rowCount) throw new UserError("Paper account is unavailable.", 503);
+  if (!account.rowCount) throw new UserError("Your practice account is unavailable right now.", 503);
   const quotes = new Quotes();
   await quotes.prefetch(positions.rows.map((row) => row.market as string));
   const enriched = await Promise.all(
@@ -598,13 +598,13 @@ export async function closePaperPosition(
     "SELECT opened_at FROM paper_positions WHERE user_id=$1 AND strategy_id=$2 AND market=$3 AND side=$4",
     [userId, input.strategyId, input.market, input.side],
   );
-  if (!opened.rowCount) throw new UserError("Paper position not found.", 404);
+  if (!opened.rowCount) throw new UserError("That open trade was not found.", 404);
   const dayOpen = new Date(opened.rows[0].opened_at).getTime() < utcDayStart() ? await safeDayOpen(input.market) : null;
   const client = await db().connect();
   try {
     await client.query("BEGIN");
     const done = await realizePosition(client, { ...input, userId, exitPrice: price, markPrice: price, label: "Manual close", dayOpen });
-    if (!done) throw new UserError("Paper position not found.", 404);
+    if (!done) throw new UserError("That open trade was not found.", 404);
     await client.query("COMMIT");
     return { price, realizedPnlUsd: done.pnl, ledgerId: done.ledgerId };
   } catch (error) {
@@ -623,9 +623,9 @@ export async function proposeTrade(userId: string, proposal: TradeProposal) {
   await initializeDatabase();
   const head = await db().query("SELECT id,owner_id,mode,config FROM strategies WHERE id=$1", [proposal.strategyId]);
   if (!head.rowCount) throw new UserError("Strategy not found.", 404);
-  if (head.rows[0].owner_id !== userId) throw new UserError("Only the strategy owner can propose a trade.", 403);
+  if (head.rows[0].owner_id !== userId) throw new UserError("Only the strategy's owner can place trades for it.", 403);
   if (head.rows[0].mode !== "paper")
-    throw new UserError("Live trading is not available until the Strike wallet is configured.");
+    throw new UserError("Real-money trading is not available for this strategy.");
   const venue = await getStrikeMarket(proposal.market);
   if (!venue) throw new UserError(`${proposal.market} is not a market currently trading on Strike.`);
   if (proposal.notionalUsd < venue.minNotionalUsd)
@@ -670,21 +670,21 @@ export async function proposeTrade(userId: string, proposal: TradeProposal) {
       const decision = checkLimits(proposal, strategy.limits, portfolio);
       if (configuredMarket !== proposal.market) {
         decision.allowed = false;
-        decision.reasons.push(`Strategy is published for ${configuredMarket}.`);
+        decision.reasons.push(`This strategy only trades ${configuredMarket}.`);
       }
       const account = await client.query("SELECT cash_balance::float FROM paper_accounts WHERE user_id=$1 FOR UPDATE", [accountId]);
-      if (!account.rowCount) throw new UserError("Paper account is unavailable.", 503);
+      if (!account.rowCount) throw new UserError("Your practice account is unavailable right now.", 503);
       const allPositions = await client.query("SELECT market,size::float FROM paper_positions WHERE user_id=$1", [accountId]);
       let usedBuyingPower = 0;
       for (const row of allPositions.rows) usedBuyingPower += row.size * (await quotes.mark(row.market));
       const availableBuyingPower = account.rows[0].cash_balance - usedBuyingPower;
       if (proposal.notionalUsd > availableBuyingPower) {
         decision.allowed = false;
-        decision.reasons.push("Paper buying power would be exceeded.");
+        decision.reasons.push("There is not enough practice cash for this trade.");
       }
       if (strategy.paused) {
         decision.allowed = false;
-        decision.reasons.push("Strategy is paused.");
+        decision.reasons.push("The owner has paused this strategy.");
       }
       const audit = await insertAuditEvent(client, {
         strategyId: strategy.id,
@@ -786,21 +786,21 @@ export async function checkLiveTrade(userId: string, proposal: TradeProposal, st
   try {
     await client.query("BEGIN");
     const strategy = await lockStrategy(client, proposal.strategyId);
-    if (strategy.owner_id !== userId) throw new UserError("Only the strategy owner can place a live order.", 403);
+    if (strategy.owner_id !== userId) throw new UserError("Only the strategy's owner can place real orders for it.", 403);
     const decision = checkLimits(proposal, strategy.limits, portfolio);
     const configuredMarket = (strategy.config as Partial<StrategyConfig> | undefined)?.market;
     if (configuredMarket && configuredMarket !== proposal.market) {
       decision.allowed = false;
-      decision.reasons.push(`Strategy is published for ${configuredMarket}.`);
+      decision.reasons.push(`This strategy only trades ${configuredMarket}.`);
     }
     const availableMarginUsd = Number(account.available_balance);
     if (!Number.isFinite(availableMarginUsd) || availableMarginUsd <= 0) {
       decision.allowed = false;
-      decision.reasons.push("Strike account has no available margin.");
+      decision.reasons.push("Your Strike account has no available funds.");
     }
     if (strategy.paused) {
       decision.allowed = false;
-      decision.reasons.push("Strategy is paused.");
+      decision.reasons.push("The owner has paused this strategy.");
     }
     const audit = await insertAuditEvent(client, {
       strategyId: strategy.id,
@@ -836,7 +836,7 @@ export async function recordLiveExecution(userId: string, auditId: string, accep
      FROM audit_events WHERE id=$1 AND user_id=$2 AND mode='live' AND execution_snapshot IS NULL`,
     [auditId, userId],
   );
-  if (!found.rowCount) throw new UserError("Live audit record was not found or already finalized.");
+  if (!found.rowCount) throw new UserError("This real-money record was not found or is already complete.");
   const event = found.rows[0];
   let verifiedResponse = strikeResponse;
   let orderKey: string | null = null;
@@ -844,7 +844,7 @@ export async function recordLiveExecution(userId: string, auditId: string, accep
     const supplied = (strikeResponse && typeof strikeResponse === "object" ? strikeResponse : {}) as Record<string, unknown>;
     const orderId = Number(supplied.ID ?? supplied.id ?? supplied.order_id);
     const accountId = String(event.portfolio_snapshot?.accountId ?? "");
-    if (!Number.isSafeInteger(orderId) || !accountId) throw new UserError("Strike order confirmation is incomplete.");
+    if (!Number.isSafeInteger(orderId) || !accountId) throw new UserError("Strike did not return enough detail to confirm the order.");
     const order = await getStrikePublicOrder(accountId, event.market, orderId);
     const symbol = order.Symbol ?? order.symbol;
     const side = order.Side ?? order.side;
@@ -852,9 +852,9 @@ export async function recordLiveExecution(userId: string, auditId: string, accep
     const size = Number(order.Size ?? order.size);
     const expectedSide = event.side === "long" ? "buy" : "sell";
     if (symbol !== event.market || side !== expectedSide || !Number.isFinite(size) || size <= 0)
-      throw new UserError("Strike order does not match the checked proposal.");
+      throw new UserError("The Strike order does not match the trade that was checked.");
     if (/reject|cancel|expire|fail/i.test(status)) throw new UserError(`Strike reports this order as ${status.toLowerCase()}.`);
-    if (size * event.price > event.notional_usd * 1.001) throw new UserError("Strike order size exceeds the checked proposal.");
+    if (size * event.price > event.notional_usd * 1.001) throw new UserError("The Strike order is larger than the trade that was checked.");
     verifiedResponse = order;
     orderKey = `${accountId}:${orderId}`;
   }
@@ -865,10 +865,10 @@ export async function recordLiveExecution(userId: string, auditId: string, accep
        WHERE id=$1 AND user_id=$2 AND mode='live' AND execution_snapshot IS NULL RETURNING id`,
       [auditId, userId, JSON.stringify(snapshot), orderKey],
     );
-    if (!result.rowCount) throw new UserError("Live audit record was already finalized.");
+    if (!result.rowCount) throw new UserError("This real-money record is already complete.");
   } catch (error) {
     if ((error as { code?: string }).code === "23505")
-      throw new UserError("This Strike order is already attached to another audit record.");
+      throw new UserError("This Strike order is already attached to another record.");
     throw error;
   }
   return snapshot;

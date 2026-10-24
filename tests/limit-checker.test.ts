@@ -27,7 +27,7 @@ test("blocks adding to a market beyond the position cap", () => {
   const portfolio: PortfolioState = { openPositions: [{ market: "BTC-USD", side: "long", notionalUsd: 900 }], dailyPnlUsd: 0 };
   const result = checkLimits(proposal, limits, portfolio);
   assert.equal(result.allowed, false);
-  assert.match(result.reasons.join(" "), /position size/);
+  assert.match(result.reasons.join(" "), /size limit/);
 });
 
 test("blocks a third open position when the limit is two", () => {
@@ -37,7 +37,7 @@ test("blocks a third open position when the limit is two", () => {
   };
   const result = checkLimits({ ...proposal, notionalUsd: 100 }, limits, portfolio);
   assert.equal(result.allowed, false);
-  assert.match(result.reasons.join(" "), /open positions/);
+  assert.match(result.reasons.join(" "), /more positions/);
 });
 
 test("rejects non-positive and non-finite sizes and corrupt portfolio state", () => {
@@ -45,7 +45,7 @@ test("rejects non-positive and non-finite sizes and corrupt portfolio state", ()
   for (const notionalUsd of [0, -5, Number.NaN, Number.POSITIVE_INFINITY])
     assert.equal(checkLimits({ ...proposal, notionalUsd }, limits, clean).allowed, false, `notional ${notionalUsd}`);
   const corrupt: PortfolioState = { openPositions: [], dailyPnlUsd: Number.NaN };
-  assert.match(checkLimits(proposal, limits, corrupt).reasons.join(" "), /invalid/);
+  assert.match(checkLimits(proposal, limits, corrupt).reasons.join(" "), /could not be read/);
 });
 
 test("a loss one cent under the limit still allows trading", () => {

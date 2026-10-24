@@ -84,7 +84,7 @@ export async function ensurePaperAccount(userId: string) {
     if (inserted.rowCount) {
       await client.query(
         `INSERT INTO paper_ledger(id,user_id,event_type,amount,balance_after,description)
-         VALUES($1,$2,'allocation',$3,$3,'Initial paper trading allocation')`,
+         VALUES($1,$2,'allocation',$3,$3,'Practice money added to your account')`,
         [randomUUID(), userId, allocation],
       );
     }

@@ -20,7 +20,7 @@ const schema = z.object({
     style: z.enum(["momentum", "mean_reversion", "breakout"]),
     takeProfitPct: z.number().min(0).max(100).nullable(),
     stopLossPct: z.number().min(0).max(100).nullable(),
-  }).default({ market: "BTC-USD", style: "momentum", takeProfitPct: null, stopLossPct: null }),
+  }),
 });
 const updateSchema = z
   .object({
