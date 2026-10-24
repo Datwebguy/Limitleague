@@ -1,7 +1,9 @@
-import { ensurePaperUser, requireSameOrigin } from "@/lib/auth";
-import { checkLiveTrade } from "@/lib/platform";
-import { verifyStrikeAccountAuth } from "@/lib/strike/client";
 import { z } from "zod";
+import { ensurePaperUser, requireSameOrigin } from "@/lib/auth";
+import { errorResponse } from "@/lib/errors";
+import { checkLiveTrade } from "@/lib/platform";
+import { rateLimit } from "@/lib/rate-limit";
+import { verifyStrikeAccountAuth } from "@/lib/strike/client";
 
 export const runtime = "nodejs";
 
@@ -24,13 +26,15 @@ export async function POST(request: Request) {
   try {
     await requireSameOrigin(request);
     const user = await ensurePaperUser();
-    const parsed = schema.safeParse(await request.json());
+    rateLimit("live-proposal", user.id, 20, 60_000);
+    const parsed = schema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
     const { strikeAuth, strikeAccountId, ...proposal } = parsed.data;
     const verified = await verifyStrikeAccountAuth(strikeAuth);
-    if (verified.account_id !== strikeAccountId) throw new Error("The connected Strike account does not match this order.");
+    if (verified.account_id !== strikeAccountId)
+      return Response.json({ error: "The connected Strike account does not match this order." }, { status: 400 });
     return Response.json(await checkLiveTrade(user.id, proposal, verified.account_id), { status: 201 });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Live limit check failed." }, { status: 400 });
+    return errorResponse(error, "Live limit check failed.");
   }
 }

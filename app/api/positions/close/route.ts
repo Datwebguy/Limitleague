@@ -1,6 +1,8 @@
-import { ensurePaperUser, requireSameOrigin } from "@/lib/auth";
-import { closePaperPosition } from "@/lib/platform";
 import { z } from "zod";
+import { ensurePaperUser, requireSameOrigin } from "@/lib/auth";
+import { errorResponse } from "@/lib/errors";
+import { closePaperPosition } from "@/lib/platform";
+import { rateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 const schema = z.object({
@@ -13,13 +15,11 @@ export async function POST(request: Request) {
   try {
     await requireSameOrigin(request);
     const user = await ensurePaperUser();
-    const parsed = schema.safeParse(await request.json());
+    rateLimit("close", user.id, 30, 60_000);
+    const parsed = schema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return Response.json({ error: "Invalid position." }, { status: 400 });
     return Response.json(await closePaperPosition(user.id, parsed.data));
   } catch (error) {
-    return Response.json(
-      { error: error instanceof Error ? error.message : "Position could not be closed." },
-      { status: 400 },
-    );
+    return errorResponse(error, "Position could not be closed.");
   }
 }
