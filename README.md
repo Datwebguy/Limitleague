@@ -24,7 +24,7 @@ The paper league needs no wallet, email, or private key. A separate live executi
 
 Every browser workspace receives a persisted 10,000 pUSD paper allocation. The account view shows equity, available buying power, open exposure, live PnL, closable positions, and its funding ledger. pUSD is virtual trading credit and has no cash value.
 
-The public audit trail records allowed and blocked proposals with the exact limits and portfolio state used by the checker. Each new decision has a SHA-256 proof ID and a shareable verification link. Performance shown in the app is paper performance derived from positions and current Strike marks; a strategy with no trades shows no return.
+The public audit trail records allowed and blocked proposals with the exact limits and portfolio state used by the checker. Each new decision has a SHA-256 proof ID and a shareable verification link. Performance shown in the app is paper mark-to-market performance derived from positions and current Strike marks; closing a position realizes its PnL into the paper ledger, while a strategy with no trades shows no return.
 
 ## How the platform works
 

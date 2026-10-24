@@ -1352,7 +1352,7 @@ export default function Home() {
                     <span>ORDER</span>
                     <div>
                       <h3>Submit a paper order</h3>
-                      <p>Strike prices it. The checker decides.</p>
+                      <p>Select any of {markets.length || "the live"} Strike markets. The checker decides.</p>
                     </div>
                   </div>
                   <div className="form-grid compact">
