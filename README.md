@@ -20,7 +20,7 @@ LimitLeague is built for the Strike Finance ecosystem and uses live Strike mark 
 | --- | --- | --- |
 | Compare public strategies, limits, paper returns, follower counts, and decision histories. | Set caps for position size, daily loss, total exposure, and open positions. Pause immediately or tighten limits with a public record of the change. | Paper-follow a strategy. Each proposal is checked against **your own** paper portfolio under the strategy's published limits. |
 
-Publishers can also connect a trade-only Strike API wallet and place guarded mainnet market orders. LimitLeague refreshes the account's public positions and same-day fills, evaluates every published limit on the server, writes the audit proof, and only then lets the browser sign and submit an allowed order directly to Strike.
+The paper league needs no wallet, email, or private key. A separate live execution path can connect a trade-only Strike API wallet when a publisher is ready for mainnet orders; it is never required to explore, publish, follow, or test a paper strategy.
 
 Every browser workspace receives a persisted 10,000 pUSD paper allocation. The account view shows equity, available buying power, open exposure, live PnL, closable positions, and its funding ledger. pUSD is virtual trading credit and has no cash value.
 
@@ -59,14 +59,13 @@ Published limits can be tightened and strategies can be paused immediately. A st
 
 1. Open [limitleague.vercel.app](https://limitleague.vercel.app). The paper workspace starts automatically; no registration form is required.
 2. Open **Account** to confirm the pUSD allocation, equity, available buying power, exposure, positions, and ledger.
-3. Optionally choose **Connect Strike** and enter a Strike API wallet to verify the associated mainnet balance and positions. The raw private key is cleared after connection; a non-exportable signing key stays only in the browser tab and is never sent to LimitLeague or stored in PostgreSQL.
-4. Open **Publish**, describe the strategy, set all four hard limits, and publish the rule set.
-5. Open the strategy from **League**, choose any active Strike market, select long or short, enter the notional, and choose **Paper** or **Strike live**. Live mode re-verifies wallet ownership and current mainnet risk before each order.
-6. Read the allow or block result. The panel shows the resulting position size and exposure against the published ceilings.
-7. Return to **Account** to track live unrealized PnL or close an open position at the current Strike mark.
-8. Open **Audit**, select a decision, and inspect its exact inputs, outputs, block reasons, timestamp, source, and SHA-256 proof ID. Use **Copy verification link** to share that record.
-9. Select another publisher's strategy and choose **Paper follow**. Future proposals are checked against your own paper account under that strategy's limits.
-10. Owners can pause a strategy instantly or publish tighter limits from the strategy controls; each change remains visible in the audit trail.
+3. Open **Publish**, describe the strategy, set all four hard limits, and publish the rule set.
+4. Open the strategy from **League**, choose any active Strike market, select long or short, enter the notional, and submit a paper proposal.
+5. Read the allow or block result. The panel shows the resulting position size and exposure against the published ceilings.
+6. Return to **Account** to track live unrealized PnL or close an open position at the current Strike mark.
+7. Open **Audit**, select a decision, and inspect its exact inputs, outputs, block reasons, timestamp, source, and SHA-256 proof ID. Use **Copy verification link** to share that record.
+8. Select another publisher's strategy and choose **Paper follow**. Future proposals are checked against your own paper account under that strategy's limits.
+9. Owners can pause a strategy instantly or publish tighter limits from the strategy controls; each change remains visible in the audit trail.
 
 ## Run locally
 
@@ -107,6 +106,6 @@ The tests cover limit decisions. With `DATABASE_URL` set, the integration test a
 
 ## Architecture
 
-The app uses Next.js and React for the interface and API routes, PostgreSQL for durable state, and a deterministic TypeScript limit checker as the source of truth for proposal decisions. Anonymous paper workspaces use private HTTP-only session cookies, so judges can start immediately without an email flow. Strike's public API supplies markets, marks, account positions, and fill history. For live execution, the browser sends a single-use signed account proof to the server, the server asks Strike to verify it, and the risk check uses that verified account. The order itself is signed and sent directly from the browser to Strike, keeping the private key outside LimitLeague and PostgreSQL.
+The app uses Next.js and React for the interface and API routes, PostgreSQL for durable state, and a deterministic TypeScript limit checker as the source of truth for proposal decisions. Anonymous paper workspaces use private HTTP-only session cookies, so judges can start immediately without an email flow or wallet. Strike's public API supplies markets and mark prices. An optional live execution path verifies a connected API wallet and applies the same server-side check before a browser-signed order reaches Strike.
 
 LimitLeague was created for the Strike Hackathon.

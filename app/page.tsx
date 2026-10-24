@@ -892,24 +892,9 @@ export default function Home() {
               </div>
               <div className="account-head-actions">
                 <span className="source-chip"><i /> Strike marks live</span>
-                <button className={strikeAccount ? "secondary connected" : "primary"} onClick={() => strikeAccount ? disconnectStrike() : setStrikeOpen(true)}>
-                  {strikeAccount ? "Disconnect Strike" : "Connect Strike"}
-                </button>
+                <span className="source-chip"><i /> No wallet required</span>
               </div>
             </div>
-            {strikeAccount && (
-              <section className="strike-account panel">
-                <div className="strike-account-title">
-                  <span className="kicker">STRIKE MAINNET ACCOUNT</span>
-                  <h2>{strikeAccount.blockchain} · {strikeAccount.blockchain_address ? `${strikeAccount.blockchain_address.slice(0, 8)}…${strikeAccount.blockchain_address.slice(-6)}` : strikeAccount.account_id}</h2>
-                  <small>Authenticated directly in this browser with a trade-only API wallet.</small>
-                </div>
-                <div><span>Wallet balance</span><b>{money(Number(strikeAccount.wallet_balance), 2)}</b></div>
-                <div><span>Available</span><b>{money(Number(strikeAccount.available_balance), 2)}</b></div>
-                <div><span>Unrealized PnL</span><b className={Number(strikeAccount.unrealized_pnl) < 0 ? "negative" : "positive"}>{money(Number(strikeAccount.unrealized_pnl), 2)}</b></div>
-                <div><span>Open positions</span><b>{strikePositions.length}</b></div>
-              </section>
-            )}
             {portfolio && (
               <>
                 <section className="account-balance panel">
@@ -1359,13 +1344,9 @@ export default function Home() {
                   <div className="form-title">
                     <span>ORDER</span>
                     <div>
-                      <h3>{executionMode === "live" ? "Place a guarded live order" : "Submit a paper order"}</h3>
-                      <p>{executionMode === "live" ? "Current Strike account state is checked before signing." : "Strike prices it. The checker decides."}</p>
+                      <h3>Submit a paper order</h3>
+                      <p>Strike prices it. The checker decides.</p>
                     </div>
-                  </div>
-                  <div className="execution-switch" aria-label="Execution mode">
-                    <button type="button" className={executionMode === "paper" ? "active" : ""} onClick={() => setExecutionMode("paper")}><span>Paper</span><small>10,000 pUSD workspace</small></button>
-                    <button type="button" className={executionMode === "live" ? "active live" : ""} onClick={() => strikeAccount ? setExecutionMode("live") : setStrikeOpen(true)}><span>Strike live</span><small>{strikeAccount ? "Connected mainnet account" : "Connect API wallet first"}</small></button>
                   </div>
                   <div className="form-grid compact">
                     <label>
@@ -1426,7 +1407,7 @@ export default function Home() {
                     className="primary wide"
                     disabled={busy || selected.paused}
                   >
-                    {selected.paused ? "Strategy paused" : executionMode === "live" ? "Check limits and place live" : "Check paper proposal"}
+                    {selected.paused ? "Strategy paused" : "Check paper proposal"}
                     <Icon name="arrow" />
                   </button>
                   {result && (
