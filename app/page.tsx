@@ -24,6 +24,7 @@ type Strategy = {
   pnlUsd: number;
   returnPct: number | null;
   score: number | null;
+  markets?: string[];
 };
 type Audit = {
   id: string;
@@ -770,9 +771,7 @@ export default function Home() {
                           {String(index + 1).padStart(2, "0")}
                         </span>
                         <span className="strategy-main">
-                          <span className="avatar">
-                            {strategy.name[0].toUpperCase()}
-                          </span>
+                          <span className="avatar"><Icon name="shield" /></span>
                           <span>
                             <strong>{strategy.name}</strong>
                             <small>
@@ -781,6 +780,11 @@ export default function Home() {
                                 : "Compliant paper strategy"}
                               {user?.id === strategy.owner_id ? " · Yours" : ""}
                             </small>
+                            <span className="strategy-markets">
+                              {(strategy.markets ?? []).length > 0 ? strategy.markets?.slice(0, 3).map((market) => (
+                                <span className="market-chip" key={market}><i />{market.replace("-USD", "")}</span>
+                              )) : <span className="market-chip muted">No trades yet</span>}
+                            </span>
                           </span>
                         </span>
                         <span
@@ -911,7 +915,7 @@ export default function Home() {
                 </section>
                 <div className="account-grid">
                   <section className="panel positions-panel">
-                    <div className="panel-head"><div><span className="kicker">PORTFOLIO</span><h2>Open positions</h2></div><span className="panel-note">Close at the current Strike mark</span></div>
+                    <div className="panel-head"><div><span className="kicker">PORTFOLIO</span><h2>Open positions</h2></div><span className="panel-note">Close and realize PnL at the current Strike mark</span></div>
                     {portfolio.positions.length === 0 ? (
                       <div className="empty-state"><h3>No open positions.</h3><p>Publish a strategy, then submit an allowed proposal.</p><button className="primary" onClick={() => changeView("league")}>Open league</button></div>
                     ) : portfolio.positions.map((position) => (
@@ -920,7 +924,7 @@ export default function Home() {
                         <span><small>Entry / mark</small><b>{money(position.entry_price, 2)} / {money(position.markPrice, 2)}</b></span>
                         <span><small>Notional</small><b>{money(position.notionalUsd, 2)}</b></span>
                         <span><small>Unrealized</small><b className={position.unrealizedPnlUsd < 0 ? "negative" : "positive"}>{money(position.unrealizedPnlUsd, 2)}</b></span>
-                        <button className="secondary" disabled={busy} onClick={() => void onClosePosition(position)}>Close</button>
+                        <button className="secondary" disabled={busy} onClick={() => void onClosePosition(position)}>Close &amp; realize</button>
                       </div>
                     ))}
                   </section>
@@ -934,6 +938,7 @@ export default function Home() {
                     ))}
                   </section>
                 </div>
+                <p className="paper-note"><Icon name="shield" /> pUSD is virtual paper credit and cannot be withdrawn. Closing a position realizes its paper PnL into this account's ledger; Strike prices and marks remain live.</p>
               </>
             )}
           </section>

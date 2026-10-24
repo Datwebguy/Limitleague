@@ -21,6 +21,7 @@ export async function listStrategies(userId?: string) {
   const result = await db().query(
     `SELECT s.*, (SELECT count(*)::int FROM follows f WHERE f.strategy_id=s.id) AS followers,
     (SELECT count(*)::int FROM audit_events a WHERE a.strategy_id=s.id) AS audit_count,
+    (SELECT COALESCE(array_agg(DISTINCT a.market ORDER BY a.market), ARRAY[]::text[]) FROM audit_events a WHERE a.strategy_id=s.id) AS markets,
     ($1::uuid IS NOT NULL AND EXISTS(SELECT 1 FROM follows mine WHERE mine.strategy_id=s.id AND mine.user_id=$1::uuid)) AS following
     FROM strategies s ORDER BY s.created_at DESC`,
     [userId ?? null],
@@ -56,7 +57,7 @@ export async function listStrategies(userId?: string) {
             (prices.get(row.market)! - row.entry_price),
         0,
       );
-      const hasTrackRecord = ownPositions.length > 0 || strategy.audit_count > 0;
+      const hasTrackRecord = ownPositions.length > 0 || realizedByStrategy.has(strategy.id);
       const returnPct = hasTrackRecord
         ? (100 * pnlUsd) / strategy.limits.maxTotalExposureUsd
         : null;
