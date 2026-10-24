@@ -12,7 +12,7 @@ import { useStore } from "../_lib/store";
 import type { Position } from "../_lib/types";
 
 export default function Account() {
-  const { ready, portfolio, followed, mine, closeTrade, unfollow, notify } = useStore();
+  const { ready, portfolio, followed, mine, closeTrade, unfollow, notify, mode, strikeAccount, strikePositions } = useStore();
   const [closing, setClosing] = useState<Position | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -41,6 +41,33 @@ export default function Account() {
         </div>
         <Badge tone="brand"><Icon name="flask" size={14} /> Practice mode</Badge>
       </header>
+
+      {mode === "real" && strikeAccount && (
+        <section className="block real-summary" aria-labelledby="realacc">
+          <div className="block-head row"><h2 id="realacc">Your Strike account <Badge tone="warn">Real money</Badge></h2></div>
+          <div className="stats">
+            <Stat label="Available to trade" value={money(Number(strikeAccount.available_balance), 2)} note="in your Strike account" />
+            <Stat label="Account balance" value={money(Number(strikeAccount.wallet_balance), 2)} note="before open trades" />
+            <Stat label="Open profit or loss" tone={tone(Number(strikeAccount.unrealized_pnl))} value={signedMoney(Number(strikeAccount.unrealized_pnl))} note="across your real positions" />
+            <Stat label="Open real positions" value={String(strikePositions.length)} note="manage or close them on Strike" />
+          </div>
+          {strikePositions.length > 0 && (
+            <ul className="card plain-list pad">
+              {strikePositions.map((position) => {
+                const size = Number(position.size);
+                return (
+                  <li key={position.symbol}>
+                    <TokenLogo symbol={position.symbol} size={32} />
+                    <span className="grow"><b>{baseOf(position.symbol)}</b> <Badge tone={size > 0 ? "good" : "bad"}>{size > 0 ? "Long" : "Short"}</Badge><small className="block-note">Entered at {price(Number(position.entry_price))}</small></span>
+                    <b className={`num tone-${tone(Number(position.upnl))}`}>{signedMoney(Number(position.upnl))}</b>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <p className="fineprint">Below is your separate practice account, which real trades never touch.</p>
+        </section>
+      )}
 
       <section className="stats" aria-label="Balances">
         <Stat label="Total value" value={money(portfolio.equityUsd, 2)} note="cash plus open-trade results" />
@@ -151,7 +178,7 @@ function RealTrading() {
   }
 
   return (
-    <details className="card card-pad real" open={!!strikeAccount}>
+    <details id="real" className="card card-pad real" open={!!strikeAccount || (typeof window !== "undefined" && window.location.hash === "#real")}>
       <summary>
         <span><b>Real trading</b> <Badge tone="muted">Optional</Badge></span>
         <small>Connect your own Strike account to place real orders on strategies you created.</small>

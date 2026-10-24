@@ -256,3 +256,10 @@ test("workspace creation is capped per network, and a live order id attaches to 
   await db().query("UPDATE audit_events SET live_order_key=$2 WHERE id=$1", [ids[0], orderKey]);
   await assert.rejects(() => db().query("UPDATE audit_events SET live_order_key=$2 WHERE id=$1", [ids[1], orderKey]), { code: "23505" });
 });
+
+test("a background job can be claimed once per window across instances", { skip }, async () => {
+  const { claimJob } = await import("../lib/platform");
+  const name = `test-${randomUUID()}`;
+  assert.equal(await claimJob(name, 10), true);
+  assert.equal(await claimJob(name, 10), false);
+});

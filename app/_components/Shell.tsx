@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 import { money } from "../_lib/format";
 import { useStore } from "../_lib/store";
@@ -19,7 +19,14 @@ const nav: Array<{ href: string; label: string; icon: IconName; match: (path: st
 
 export function Shell({ children }: { children: ReactNode }) {
   const path = usePathname();
-  const { portfolio, toasts, dismiss, loadError, refresh, ready } = useStore();
+  const router = useRouter();
+  const { portfolio, toasts, dismiss, loadError, refresh, ready, mode, setMode, strikeAccount, notify } = useStore();
+  const real = mode === "real";
+  const choose = (next: "practice" | "real") => {
+    if (setMode(next)) return;
+    notify("Connect your Strike account first to switch to Real. You'll find it under My account → Real trading.");
+    router.push("/account#real");
+  };
   return (
     <div className="shell">
       <a href="#main" className="skip-link">Skip to content</a>
@@ -32,16 +39,26 @@ export function Shell({ children }: { children: ReactNode }) {
                 {item.label}
               </Link>
             ))}
+            <Link href="/demo" className={path.startsWith("/demo") ? "active" : ""}>Try a scenario</Link>
           </nav>
           <div className="topbar-end">
             <span className="live-dot" title="Prices come straight from Strike Finance"><i /> Live Strike prices</span>
-            <Link href="/account" className="practice-pill" title="Practice money has no cash value">
-              <span>Practice</span>
-              <b>{portfolio ? money(portfolio.availableUsd) : "—"}</b>
+            <div className={`modeswitch ${real ? "is-real" : ""}`} role="group" aria-label="Practice or real money">
+              <button className={!real ? "on" : ""} aria-pressed={!real} onClick={() => choose("practice")}>Practice</button>
+              <button className={real ? "on" : ""} aria-pressed={real} onClick={() => choose("real")}>Real</button>
+            </div>
+            <Link href="/account" className={`balance-pill ${real ? "is-real" : ""}`} title={real ? "Available in your Strike account" : "Practice money has no cash value"}>
+              <b>{real ? money(Number(strikeAccount?.available_balance ?? 0)) : portfolio ? money(portfolio.availableUsd) : "—"}</b>
             </Link>
           </div>
         </div>
       </header>
+
+      {real && (
+        <div className="banner banner-real" role="status">
+          <div className="container banner-inner"><span><b>Real mode.</b> Trades you place on your own strategies use real money in your Strike account. Switch back to Practice any time.</span><button className="btn btn-secondary btn-sm" onClick={() => choose("practice")}>Switch to Practice</button></div>
+        </div>
+      )}
 
       {ready && loadError && (
         <div className="banner" role="alert">
@@ -63,6 +80,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <nav aria-label="Footer">
             <Link href="/strategies">Strategies</Link>
             <Link href="/create">Create a strategy</Link>
+            <Link href="/demo">Try a scenario</Link>
             <Link href="/activity">Public activity</Link>
             <Link href="/#how-it-works">How it works</Link>
             <Link href="/#questions">Questions</Link>

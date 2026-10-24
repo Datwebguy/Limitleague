@@ -10,6 +10,8 @@ import type {
 type Toast = { id: number; text: string; tone: "info" | "good" | "bad" };
 type User = { id: string };
 
+export type Mode = "practice" | "real";
+export type StrikePosition = { symbol: string; size: string; entry_price: string; upnl: string; leverage?: number };
 export type TradeInput = { market: string; side: TradeSide; notionalUsd: number; reason: string };
 export type TradeResult = Decision & { price: number };
 export type CreateInput = {
@@ -69,6 +71,10 @@ type Store = {
   loadMoreActivity: () => Promise<void>;
   verifyHistory: (strategyId: string) => Promise<Verification>;
   strikeAccount: StrikeAccount | null;
+  strikePositions: StrikePosition[];
+  mode: Mode;
+  /** Real mode needs a connected Strike account; returns false when it can't switch. */
+  setMode: (mode: Mode) => boolean;
   connectStrike: (publicKey: string, privateKey: string) => Promise<void>;
   disconnectStrike: () => void;
   prepareRealTrade: (strategyId: string, input: TradeInput) => Promise<RealTradeDraft>;
@@ -93,6 +99,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [markets, setMarkets] = useState<Market[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [strikeAccount, setStrikeAccount] = useState<StrikeAccount | null>(null);
+  const [strikePositions, setStrikePositions] = useState<StrikePosition[]>([]);
+  const [mode, setModeState] = useState<Mode>("practice");
   const signingKey = useRef<CryptoKey | null>(null);
   const publicKey = useRef("");
   const toastId = useRef(0);
@@ -191,6 +199,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return data.verification;
   };
 
+  /** Reads the connected Strike account and positions again, so Real mode shows current numbers. */
+  const refreshStrike = useCallback(async () => {
+    if (!signingKey.current) return;
+    try {
+      const get = async (path: string) => fetch(`${STRIKE_API}${path}`, { headers: await strikeHeaders(publicKey.current, signingKey.current!, "GET", path) });
+      const [account, positions] = await Promise.all([get("/v2/account"), get("/v2/positions")]);
+      if (account.ok) setStrikeAccount((await account.json()) as StrikeAccount);
+      if (positions.ok) setStrikePositions(((await positions.json()) as { positions?: StrikePosition[] }).positions ?? []);
+    } catch {
+      // Keep the last numbers; the next refresh will try again.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (mode !== "real") return;
+    void refreshStrike();
+    const timer = window.setInterval(() => void refreshStrike(), 30_000);
+    return () => window.clearInterval(timer);
+  }, [mode, refreshStrike]);
+
   const connectStrike: Store["connectStrike"] = async (pub, priv) => {
     const imported = await importStrikeKey(pub, priv);
     const get = async (path: string) =>
@@ -200,11 +228,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setStrikeAccount((await account.json()) as StrikeAccount);
     signingKey.current = imported.signingKey;
     publicKey.current = imported.publicKey;
+    await refreshStrike();
   };
   const disconnectStrike = () => {
     signingKey.current = null;
     publicKey.current = "";
     setStrikeAccount(null);
+    setStrikePositions([]);
+    setModeState("practice");
+  };
+  const setMode: Store["setMode"] = (next) => {
+    if (next === "real" && !signingKey.current) return false;
+    setModeState(next);
+    return true;
   };
 
   const prepareRealTrade: Store["prepareRealTrade"] = async (strategyId, input) => {
@@ -245,13 +281,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const result = await response.json().catch(() => ({}));
     await api("/api/live-proposals/result", { method: "POST", json: { auditId: draft.auditId, accepted: response.ok, strikeResponse: result } });
     await refresh();
+    await refreshStrike();
     if (!response.ok) throw new Error(result.error ?? result.msg ?? "Strike did not accept the order.");
   };
 
   const value: Store = {
     ready, loadError, user, strategies, mine, followed, activity, hasMoreActivity: cursor !== null, portfolio, markets,
     toasts, notify, dismiss, refresh, createStrategy, follow, unfollow, placeTrade, closeTrade, setPaused, tighten,
-    runBacktest, loadMoreActivity, verifyHistory, strikeAccount, connectStrike, disconnectStrike, prepareRealTrade, sendRealOrder,
+    runBacktest, loadMoreActivity, verifyHistory, strikeAccount, strikePositions, mode, setMode, connectStrike, disconnectStrike, prepareRealTrade, sendRealOrder,
   };
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }

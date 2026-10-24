@@ -529,6 +529,18 @@ export async function settleExits(userIds: string[]) {
   return closed;
 }
 
+/** Lets a background job run at most once per window, across every server instance. */
+export async function claimJob(name: string, minutes: number) {
+  await initializeDatabase();
+  const claimed = await db().query(
+    `INSERT INTO job_runs(name,last_run) VALUES($1,now())
+     ON CONFLICT(name) DO UPDATE SET last_run=now() WHERE job_runs.last_run < now() - make_interval(mins => $2)
+     RETURNING name`,
+    [name, minutes],
+  );
+  return (claimed.rowCount ?? 0) > 0;
+}
+
 /** Scheduled sweep: settles exits for every account that holds a position with a take-profit or stop-loss. */
 export async function settleAllExits() {
   await initializeDatabase();
