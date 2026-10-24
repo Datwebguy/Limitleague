@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { currentUser, ensurePaperUser, requireSameOrigin } from "@/lib/auth";
+import { errorResponse, UserError } from "@/lib/errors";
 import { createStrategy, listStrategies, updateStrategy } from "@/lib/platform";
+import { rateLimit } from "@/lib/rate-limit";
+
 export const runtime = "nodejs";
 const schema = z.object({
   name: z.string().trim().min(3).max(80),
@@ -13,7 +16,7 @@ const schema = z.object({
     pauseAtDailyLoss: z.literal(true),
   }),
   config: z.object({
-    market: z.string().regex(/^[A-Z0-9-]+$/),
+    market: z.string().regex(/^[A-Z0-9]+-[A-Z0-9]+$/),
     style: z.enum(["momentum", "mean_reversion", "breakout"]),
     takeProfitPct: z.number().min(0).max(100).nullable(),
     stopLossPct: z.number().min(0).max(100).nullable(),
@@ -26,64 +29,38 @@ const updateSchema = z
     limits: schema.shape.limits.optional(),
   })
   .refine((data) => data.paused !== undefined || data.limits !== undefined);
+
 export async function GET() {
   try {
-    return Response.json({
-      strategies: await listStrategies((await currentUser())?.id),
-    });
-  } catch {
-    return Response.json(
-      { error: "Database is unavailable." },
-      { status: 503 },
-    );
+    return Response.json({ strategies: await listStrategies((await currentUser())?.id) });
+  } catch (error) {
+    return errorResponse(error, "The league is unavailable right now.", 503);
   }
 }
+
 export async function POST(request: Request) {
   try {
     await requireSameOrigin(request);
     const user = await ensurePaperUser();
-    const parsed = schema.safeParse(await request.json());
-    if (!parsed.success)
-      return Response.json({ error: parsed.error.flatten() }, { status: 400 });
-    const strategy = await createStrategy(
-      user.id,
-      parsed.data.name,
-      parsed.data.description,
-      parsed.data.limits,
-      parsed.data.config,
-    );
+    rateLimit("publish", user.id, 10, 60_000);
+    const parsed = schema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
+    const strategy = await createStrategy(user.id, parsed.data.name, parsed.data.description, parsed.data.limits, parsed.data.config);
     return Response.json({ strategy }, { status: 201 });
-  } catch {
-    return Response.json(
-      { error: "Could not publish strategy." },
-      { status: 500 },
-    );
+  } catch (error) {
+    return errorResponse(error, "Could not publish strategy.", 500);
   }
 }
+
 export async function PATCH(request: Request) {
   try {
     await requireSameOrigin(request);
     const user = await ensurePaperUser();
-    const parsed = updateSchema.safeParse(await request.json());
-    if (!parsed.success)
-      return Response.json(
-        { error: "Check the strategy changes." },
-        { status: 400 },
-      );
-    return Response.json({
-      strategy: await updateStrategy(
-        user.id,
-        parsed.data.strategyId,
-        parsed.data,
-      ),
-    });
+    rateLimit("strategy-edit", user.id, 30, 60_000);
+    const parsed = updateSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) throw new UserError("Check the strategy changes.");
+    return Response.json({ strategy: await updateStrategy(user.id, parsed.data.strategyId, parsed.data) });
   } catch (error) {
-    return Response.json(
-      {
-        error:
-          error instanceof Error ? error.message : "Could not edit strategy.",
-      },
-      { status: 400 },
-    );
+    return errorResponse(error, "Could not edit strategy.");
   }
 }

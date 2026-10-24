@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { cookies, headers } from "next/headers";
 import { db, initializeDatabase } from "./db";
+import { UserError } from "./errors";
 
 const cookieName = "limitleague_session";
 async function createSession(userId: string) {
@@ -29,6 +30,28 @@ export async function currentUser() {
   );
   return (result.rows[0] as { id: string } | undefined) ?? null;
 }
+/** A salted hash of the caller's network address, used only to cap how many workspaces one network can create. */
+async function networkHash() {
+  try {
+    const list = await headers();
+    const address = list.get("x-forwarded-for")?.split(",")[0]?.trim() || list.get("x-real-ip") || "local";
+    return createHash("sha256").update(`limitleague-network:${address}`).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+export async function assertWorkspaceBudget(ipHash: string | null) {
+  if (!ipHash) return;
+  const limit = Number(process.env.PAPER_WORKSPACES_PER_NETWORK_PER_HOUR ?? "30");
+  const recent = await db().query(
+    "SELECT count(*)::int AS n FROM users WHERE ip_hash=$1 AND created_at > now() - interval '1 hour'",
+    [ipHash],
+  );
+  if (recent.rows[0].n >= limit)
+    throw new UserError("Too many new workspaces were created from this network. Please try again later.", 429, 3600);
+}
+
 export async function ensurePaperUser() {
   await initializeDatabase();
   const existing = await currentUser();
@@ -36,10 +59,12 @@ export async function ensurePaperUser() {
     await ensurePaperAccount(existing.id);
     return existing;
   }
+  const ipHash = await networkHash();
+  await assertWorkspaceBudget(ipHash);
   const id = randomUUID();
   await db().query(
-    "INSERT INTO users(id,email,password_hash) VALUES($1,$2,$3)",
-    [id, `paper-${id}@limitleague.local`, "paper-session"],
+    "INSERT INTO users(id,email,password_hash,ip_hash) VALUES($1,$2,$3,$4)",
+    [id, `paper-${id}@limitleague.local`, "paper-session", ipHash],
   );
   await ensurePaperAccount(id);
   await createSession(id);
@@ -74,6 +99,11 @@ export async function ensurePaperAccount(userId: string) {
 export async function requireSameOrigin(request: Request) {
   const origin = request.headers.get("origin");
   const host = (await headers()).get("host");
-  if (!origin || !host || new URL(origin).host !== host)
-    throw new Error("Request origin is not allowed.");
+  let originHost: string | null = null;
+  try {
+    originHost = origin ? new URL(origin).host : null;
+  } catch {
+    originHost = null;
+  }
+  if (!originHost || !host || originHost !== host) throw new UserError("Request origin is not allowed.", 403);
 }

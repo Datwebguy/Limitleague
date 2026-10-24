@@ -1106,7 +1106,7 @@ textarea {
 }
 .drawer-performance {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 25px 0 16px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1776,3 +1776,7 @@ textarea {
     bottom: 78px;
   }
 }
+
+.load-older { width: 100%; margin-top: 12px; }
+.proof-hash small { color: #c8d3cc; font: 11px/1.5 var(--mono); }
+.proof-hash button { justify-self: start; }

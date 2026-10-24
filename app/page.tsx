@@ -24,6 +24,10 @@ type Strategy = {
   pnlUsd: number;
   returnPct: number | null;
   score: number | null;
+  allowedCount: number;
+  blockedCount: number;
+  compliancePct: number | null;
+  priceStale?: boolean;
   markets?: string[];
   config?: { market: string; style: "momentum" | "mean_reversion" | "breakout"; takeProfitPct: number | null; stopLossPct: number | null };
 };
@@ -49,6 +53,8 @@ type Audit = {
   };
   decision_snapshot?: Decision;
   event_hash?: string;
+  prev_hash?: string | null;
+  hash_version?: number;
   mode?: "paper" | "live";
   execution_snapshot?: { accepted: boolean; strikeResponse?: Record<string, unknown>; recordedAt: string };
   created_at: string;
@@ -197,6 +203,8 @@ export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [audit, setAudit] = useState<Audit[]>([]);
+  const [auditCursor, setAuditCursor] = useState<string | null>(null);
+  const [verification, setVerification] = useState<{ valid: boolean; checked: number; headHash: string | null; problem: string | null; unchainedLegacyEvents: number } | "checking" | "failed" | null>(null);
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [markets, setMarkets] = useState<Market[]>([]);
   const [selectedAudit, setSelectedAudit] = useState<Audit | null>(null);
@@ -262,6 +270,7 @@ export default function Home() {
       setUser(session.user);
       setStrategies(strategyData.strategies);
       setAudit(auditData.audit);
+      setAuditCursor(auditData.nextCursor ?? null);
       setPortfolio(portfolioData.portfolio);
       setMarkets(marketData.markets);
     } catch (error) {
@@ -277,10 +286,43 @@ export default function Home() {
   }, [refresh]);
 
   useEffect(() => {
-    if (!audit.length) return;
     const auditId = new URLSearchParams(window.location.search).get("audit");
-    if (auditId) setSelectedAudit(audit.find((item) => item.id === auditId) ?? null);
+    if (!auditId) return;
+    const listed = audit.find((item) => item.id === auditId);
+    if (listed) {
+      setSelectedAudit(listed);
+      return;
+    }
+    if (!audit.length) return;
+    fetch(`/api/audit/${auditId}`, { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => data?.event && setSelectedAudit({ ...data.event, event_type: data.event.event_kind ?? "proposal" }))
+      .catch(() => undefined);
   }, [audit]);
+
+  async function loadOlderAudit() {
+    if (!auditCursor) return;
+    try {
+      const response = await fetch(`/api/audit?before=${encodeURIComponent(auditCursor)}`, { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Could not load older decisions.");
+      setAudit((current) => [...current, ...data.audit]);
+      setAuditCursor(data.nextCursor ?? null);
+    } catch (error) {
+      setMessage((error as Error).message);
+    }
+  }
+
+  async function verifyChain(strategyId: string) {
+    setVerification("checking");
+    try {
+      const response = await fetch(`/api/audit/verify?strategyId=${strategyId}`, { cache: "no-store" });
+      const data = await response.json();
+      setVerification(response.ok ? data.verification : "failed");
+    } catch {
+      setVerification("failed");
+    }
+  }
 
   const metrics = useMemo(() => {
     const proposals = audit.filter((item) => item.event_type === "proposal");
@@ -337,6 +379,9 @@ export default function Home() {
         pnlUsd: 0,
         returnPct: null,
         score: null,
+        allowedCount: 0,
+        blockedCount: 0,
+        compliancePct: null,
       };
       setDraft({ ...draft, name: "", description: "" });
       setView("league");
@@ -369,6 +414,27 @@ export default function Home() {
         followers: strategy.followers + (strategy.following ? 0 : 1),
       });
       setMessage(`You are paper-following ${strategy.name}.`);
+      await refresh();
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onUnfollow(strategy: Strategy) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/follows", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ strategyId: strategy.id }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Could not unfollow.");
+      setSelected({ ...strategy, following: false, followers: Math.max(0, strategy.followers - 1) });
+      setMessage(`You stopped following ${strategy.name}. Positions you already hold stay open until you close them.`);
       await refresh();
     } catch (error) {
       setMessage((error as Error).message);
@@ -556,6 +622,7 @@ export default function Home() {
 
   function closeAudit() {
     setSelectedAudit(null);
+    setVerification(null);
     window.history.replaceState(null, "", window.location.pathname);
   }
 
@@ -794,7 +861,9 @@ export default function Home() {
                             <small>
                               {strategy.paused
                                 ? "Paused"
-                                : "Compliant paper strategy"}
+                                : strategy.compliancePct === null
+                                  ? "No decisions yet"
+                                  : `${Math.round(strategy.compliancePct)}% compliant · ${strategy.blockedCount} blocked`}
                               {user?.id === strategy.owner_id ? " · Yours" : ""}
                             </small>
                             <span className="strategy-markets">
@@ -1037,6 +1106,9 @@ export default function Home() {
                   </button>
                 ))
               )}
+              {auditCursor && (
+                <button className="secondary load-older" onClick={() => void loadOlderAudit()}>Load older decisions</button>
+              )}
             </div>
           </section>
         )}
@@ -1247,6 +1319,23 @@ export default function Home() {
             <div className="proof-hash">
               <span>SHA-256 decision proof</span>
               <code>{selectedAudit.event_hash ?? selectedAudit.id}</code>
+              {selectedAudit.prev_hash && (<><span>Previous event</span><code>{selectedAudit.prev_hash}</code></>)}
+              {selectedAudit.hash_version === 2 ? (
+                <button className="secondary" onClick={() => void verifyChain(selectedAudit.strategy_id)} disabled={verification === "checking"}>
+                  {verification === "checking" ? "Recomputing…" : "Recompute this strategy's whole proof chain"}
+                </button>
+              ) : (
+                <small>This decision predates chained proofs.</small>
+              )}
+              {verification && verification !== "checking" && (
+                <small role="status">
+                  {verification === "failed"
+                    ? "Verification is unavailable right now."
+                    : verification.valid
+                      ? `Verified: ${verification.checked} chained decisions recomputed and linked. Head ${verification.headHash?.slice(0, 12)}…`
+                      : `Chain broken: ${verification.problem}`}
+                </small>
+              )}
             </div>
             {selectedAudit.limits_snapshot && selectedAudit.decision_snapshot && (
               <div className="audit-checks">
@@ -1303,10 +1392,10 @@ export default function Home() {
             </button>
             <div className="drawer-top">
               <span
-                className={`status-badge ${selected.paused ? "paused" : ""}`}
+                className={`status-badge ${selected.paused || (selected.compliancePct !== null && selected.compliancePct < 50) ? "paused" : ""}`}
               >
                 <i />
-                {selected.paused ? "PAUSED" : "PAPER · COMPLIANT"}
+                {selected.paused ? "PAUSED" : selected.compliancePct === null ? "PAPER · NEW" : `PAPER · ${Math.round(selected.compliancePct)}% COMPLIANT`}
               </span>
               {user?.id === selected.owner_id && (
                 <span className="owner-badge">YOUR STRATEGY</span>
@@ -1321,6 +1410,10 @@ export default function Home() {
               <div>
                 <span>Paper return</span>
                 <b>{percent(selected.returnPct)}</b>
+              </div>
+              <div>
+                <span>Compliance</span>
+                <b>{selected.compliancePct === null ? "—" : `${Math.round(selected.compliancePct)}%`}</b>
               </div>
               <div>
                 <span>Decisions</span>
@@ -1358,15 +1451,13 @@ export default function Home() {
             <div className="drawer-actions">
               <button
                 className="primary"
-                disabled={
-                  busy || user?.id === selected.owner_id || selected.following
-                }
-                onClick={() => void onFollow(selected)}
+                disabled={busy || user?.id === selected.owner_id}
+                onClick={() => void (selected.following ? onUnfollow(selected) : onFollow(selected))}
               >
                 {user?.id === selected.owner_id
                   ? "Your paper strategy"
                   : selected.following
-                    ? "Following in paper"
+                    ? "Following · tap to unfollow"
                     : "Paper follow"}
                 <Icon name="arrow" />
               </button>
