@@ -463,6 +463,10 @@ export async function proposeTrade(userId: string, proposal: TradeProposal) {
         price,
       );
       const decision = checkLimits(proposal, strategy.limits, portfolio);
+      if (configuredMarket !== proposal.market) {
+        decision.allowed = false;
+        decision.reasons.push(`Strategy is published for ${configuredMarket}.`);
+      }
       const account = await client.query(
         "SELECT cash_balance::float FROM paper_accounts WHERE user_id=$1 FOR UPDATE",
         [accountId],
@@ -612,6 +616,11 @@ export async function checkLiveTrade(
     if (!found.rowCount || found.rows[0].owner_id !== userId) throw new Error("Only the strategy owner can place a live order.");
     const strategy = found.rows[0] as StrategyRow;
     const decision = checkLimits(proposal, strategy.limits, portfolio);
+    const configuredMarket = (strategy.config as Partial<StrategyConfig> | undefined)?.market;
+    if (configuredMarket && configuredMarket !== proposal.market) {
+      decision.allowed = false;
+      decision.reasons.push(`Strategy is published for ${configuredMarket}.`);
+    }
     const availableMarginUsd = Number(account.available_balance);
     if (!Number.isFinite(availableMarginUsd) || availableMarginUsd <= 0) {
       decision.allowed = false;
