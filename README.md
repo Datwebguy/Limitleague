@@ -57,11 +57,11 @@ flowchart LR
 
 Published limits can be tightened and strategies can be paused immediately. A strategy's public performance comes from compliant paper positions marked with current Strike data.
 
-## Paper balances and outcomes
+## Strategy studio and outcomes
 
 Each workspace starts with 10,000 pUSD. pUSD is a virtual testing balance, so it cannot be deposited or withdrawn. A position's unrealized PnL moves with the current Strike mark. **Close & realize** removes the position and records the result in the pUSD ledger. No return is shown for a strategy until it has an actual paper position or realized result; LimitLeague does not manufacture profitable examples.
 
-The current product contract is open, mark, and close. Take-profit and stop-loss triggers are not silently simulated as if they were live orders; they would require additional published strategy rules and audit events.
+The strategy studio lets a publisher choose a live Strike market, a transparent signal style (momentum, mean reversion, or breakout), and optional take-profit and stop-loss percentages. A seven-day backtest runs against Strike's public hourly candles and reports return, drawdown, win rate, blocked signals, and compliance before publication. Paper positions inherit the published exits; when a live Strike mark reaches a target, LimitLeague closes the paper position, realizes PnL, and writes a close event to the audit trail.
 
 ## How to use LimitLeague
 

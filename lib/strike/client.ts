@@ -43,6 +43,22 @@ export async function getStrikeMarkets(): Promise<StrikeMarket[]> {
     .sort((a, b) => a.symbol.localeCompare(b.symbol));
 }
 
+export type StrikeCandle = { timestamp: number; open: number; high: number; low: number; close: number; volume: number };
+
+export async function getStrikeCandles(symbol: string, interval = "1h", limit = 168): Promise<StrikeCandle[]> {
+  const url = new URL("/price/v2/klines", baseUrl);
+  url.searchParams.set("symbol", symbol);
+  url.searchParams.set("interval", interval);
+  url.searchParams.set("limit", String(Math.min(720, Math.max(24, limit))));
+  url.searchParams.set("priceType", "last");
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) throw new Error("Strike market history is unavailable.");
+  const rows = await response.json();
+  if (!Array.isArray(rows)) throw new Error("Strike market history is invalid.");
+  return rows.map((row: unknown[]) => ({ timestamp: Number(row[0]), open: Number(row[1]), high: Number(row[2]), low: Number(row[3]), close: Number(row[4]), volume: Number(row[5] ?? 0) }))
+    .filter((c: StrikeCandle) => [c.timestamp,c.open,c.high,c.low,c.close].every(Number.isFinite));
+}
+
 async function publicStrikeRequest(path: string, query: Record<string, string>) {
   const url = new URL(path, baseUrl);
   for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);

@@ -25,6 +25,7 @@ type Strategy = {
   returnPct: number | null;
   score: number | null;
   markets?: string[];
+  config?: { market: string; style: "momentum" | "mean_reversion" | "breakout"; takeProfitPct: number | null; stopLossPct: number | null };
 };
 type Audit = {
   id: string;
@@ -69,6 +70,7 @@ type Market = { symbol: string; name: string; markPrice: number; fundingRate: nu
 type Position = {
   strategy_id: string; strategy_name: string; market: string; side: "long" | "short";
   size: number; entry_price: number; markPrice: number; notionalUsd: number; unrealizedPnlUsd: number;
+  take_profit_price?: number | null; stop_loss_price?: number | null;
 };
 type Portfolio = {
   currency: string; startingBalanceUsd: number; cashBalanceUsd: number; equityUsd: number;
@@ -217,7 +219,13 @@ export default function Home() {
     dailyLossLimitUsd: "300",
     maxTotalExposureUsd: "5000",
     maxOpenPositions: "2",
+    market: "BTC-USD",
+    style: "momentum",
+    takeProfitPct: "2",
+    stopLossPct: "1",
   });
+  const [backtestBusy, setBacktestBusy] = useState(false);
+  const [backtestResult, setBacktestResult] = useState<{ returnPct:number; maxDrawdownPct:number; winRatePct:number; trades:number; blockedSignals:number; compliancePct:number; endingEquityUsd:number } | null>(null);
   const [proposal, setProposal] = useState({
     market: "BTC-USD",
     side: "long",
@@ -319,6 +327,7 @@ export default function Home() {
           maxOpenPositions: Number(draft.maxOpenPositions),
           pauseAtDailyLoss: true,
         },
+        config: { market: draft.market, style: draft.style, takeProfitPct: Number(draft.takeProfitPct) || null, stopLossPct: Number(draft.stopLossPct) || null },
       });
       const created: Strategy = {
         ...data.strategy,
@@ -339,6 +348,14 @@ export default function Home() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function runBacktest() {
+    setBacktestBusy(true); setMessage("");
+    try {
+      const data = await post("/api/backtest", { market: draft.market, style: draft.style, days: 7, notionalUsd: Number(draft.maxPositionNotionalUsd), takeProfitPct: Number(draft.takeProfitPct) || null, stopLossPct: Number(draft.stopLossPct) || null, limits: { maxPositionNotionalUsd: Number(draft.maxPositionNotionalUsd), dailyLossLimitUsd: Number(draft.dailyLossLimitUsd), maxTotalExposureUsd: Number(draft.maxTotalExposureUsd), maxOpenPositions: Number(draft.maxOpenPositions), pauseAtDailyLoss: true } });
+      setBacktestResult(data.result);
+    } catch (error) { setMessage((error as Error).message); } finally { setBacktestBusy(false); }
   }
 
   async function onFollow(strategy: Strategy) {
@@ -1149,6 +1166,24 @@ export default function Home() {
                   />
                   <small>Maximum at once</small>
                 </label>
+              </div>
+              <div className="form-title divided">
+                <span>03</span>
+                <div>
+                  <h2>Strategy behavior</h2>
+                  <p>Choose the market and exits that paper followers will inherit.</p>
+                </div>
+              </div>
+              <div className="form-grid">
+                <label>Market<select value={draft.market} onChange={(e) => setDraft({ ...draft, market: e.target.value })}>{(markets.length ? markets : [{ symbol: "BTC-USD" } as Market]).slice(0, 33).map((m) => <option key={m.symbol} value={m.symbol}>{m.symbol}</option>)}</select><small>Strike perpetual</small></label>
+                <label>Signal style<select value={draft.style} onChange={(e) => setDraft({ ...draft, style: e.target.value })}><option value="momentum">Momentum</option><option value="mean_reversion">Mean reversion</option><option value="breakout">Breakout</option></select><small>Used by the backtest</small></label>
+                <label>Take profit %<input type="number" min="0" step="0.1" value={draft.takeProfitPct} onChange={(e) => setDraft({ ...draft, takeProfitPct: e.target.value })} /><small>Automatic paper exit</small></label>
+                <label>Stop loss %<input type="number" min="0" step="0.1" value={draft.stopLossPct} onChange={(e) => setDraft({ ...draft, stopLossPct: e.target.value })} /><small>Automatic paper exit</small></label>
+              </div>
+              <div className="backtest-box">
+                <div><strong>Validate this strategy on Strike candles</strong><small>Runs a seven day backtest using live public market history.</small></div>
+                <button type="button" className="secondary" disabled={backtestBusy} onClick={runBacktest}>{backtestBusy ? "Running…" : "Run backtest"}</button>
+                {backtestResult && <div className="backtest-result"><span><b>{percent(backtestResult.returnPct)}</b><small>return</small></span><span><b>{backtestResult.trades}</b><small>trades</small></span><span><b>{backtestResult.winRatePct}%</b><small>win rate</small></span><span><b>{backtestResult.maxDrawdownPct}%</b><small>max drawdown</small></span><span><b>{backtestResult.compliancePct}%</b><small>compliance</small></span></div>}
               </div>
               <div className="publish-confirm">
                 <Icon name="shield" />

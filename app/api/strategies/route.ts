@@ -12,6 +12,12 @@ const schema = z.object({
     maxOpenPositions: z.number().int().min(1).max(100),
     pauseAtDailyLoss: z.literal(true),
   }),
+  config: z.object({
+    market: z.string().regex(/^[A-Z0-9-]+$/),
+    style: z.enum(["momentum", "mean_reversion", "breakout"]),
+    takeProfitPct: z.number().min(0).max(100).nullable(),
+    stopLossPct: z.number().min(0).max(100).nullable(),
+  }).default({ market: "BTC-USD", style: "momentum", takeProfitPct: null, stopLossPct: null }),
 });
 const updateSchema = z
   .object({
@@ -44,6 +50,7 @@ export async function POST(request: Request) {
       parsed.data.name,
       parsed.data.description,
       parsed.data.limits,
+      parsed.data.config,
     );
     return Response.json({ strategy }, { status: 201 });
   } catch {

@@ -888,6 +888,14 @@ svg {
   padding: 28px;
   overflow: visible;
 }
+
+.backtest-box { display:grid; gap:14px; margin:20px 0; padding:16px; border:1px solid var(--line); background:rgba(255,255,255,.025); }
+.backtest-box > div:first-child { display:grid; gap:5px; }
+.backtest-box small { color:var(--muted); font:10px var(--mono); }
+.backtest-result { display:grid; grid-template-columns:repeat(5,1fr); gap:10px; }
+.backtest-result span { display:grid; gap:4px; }
+.backtest-result b { color:var(--green); font:600 15px var(--mono); }
+@media (max-width: 650px) { .backtest-result { grid-template-columns:repeat(3,1fr); } }
 .form-title {
   display: flex;
   align-items: flex-start;

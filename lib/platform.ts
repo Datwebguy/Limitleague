@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { db, initializeDatabase } from "./db";
 import { checkLimits } from "./limit-checker";
 import { getStrikeDayOpen, getStrikePrice, getStrikePublicAccount, getStrikePublicFills, getStrikePublicOrder, getStrikePublicPositions } from "./strike/client";
-import type { HardLimits, PortfolioState, TradeProposal } from "./types";
+import type { HardLimits, PortfolioState, StrategyConfig, TradeProposal } from "./types";
 
 export type StrategyRow = {
   id: string;
@@ -11,6 +11,7 @@ export type StrategyRow = {
   name: string;
   description: string;
   mode: "paper" | "live";
+  config: StrategyConfig;
   limits: HardLimits;
   paused: boolean;
   created_at: string;
@@ -75,12 +76,13 @@ export async function createStrategy(
   name: string,
   description: string,
   limits: HardLimits,
+  config: StrategyConfig = { market: "BTC-USD", style: "momentum", takeProfitPct: null, stopLossPct: null },
 ) {
   await initializeDatabase();
   const id = randomUUID();
   const result = await db().query(
-    "INSERT INTO strategies(id,owner_id,name,description,limits) VALUES($1,$2,$3,$4,$5) RETURNING *",
-    [id, ownerId, name, description, JSON.stringify(limits)],
+    "INSERT INTO strategies(id,owner_id,name,description,limits,config) VALUES($1,$2,$3,$4,$5,$6) RETURNING *",
+    [id, ownerId, name, description, JSON.stringify(limits), JSON.stringify(config)],
   );
   return result.rows[0] as StrategyRow;
 }
@@ -247,6 +249,7 @@ async function paperState(
 
 export async function getPaperPortfolio(userId: string) {
   await initializeDatabase();
+  await settleTriggeredPaperPositions(userId);
   const [account, positions, ledger] = await Promise.all([
     db().query(
       `SELECT starting_balance::float,cash_balance::float,currency,created_at
@@ -254,7 +257,8 @@ export async function getPaperPortfolio(userId: string) {
       [userId],
     ),
     db().query(
-      `SELECT p.strategy_id,p.market,p.side,p.size::float,p.entry_price::float,s.name AS strategy_name
+      `SELECT p.strategy_id,p.market,p.side,p.size::float,p.entry_price::float,
+       p.take_profit_price::float,p.stop_loss_price::float,s.name AS strategy_name
        FROM paper_positions p JOIN strategies s ON s.id=p.strategy_id
        WHERE p.user_id=$1 ORDER BY p.market`,
       [userId],
@@ -296,6 +300,73 @@ export async function getPaperPortfolio(userId: string) {
   };
 }
 
+async function settleTriggeredPaperPositions(userId: string) {
+  const pending = await db().query(
+    `SELECT p.strategy_id,p.market,p.side,p.size::float,p.entry_price::float,
+            p.take_profit_price::float,p.stop_loss_price::float
+     FROM paper_positions p
+     WHERE p.user_id=$1 AND (p.take_profit_price IS NOT NULL OR p.stop_loss_price IS NOT NULL)`,
+    [userId],
+  );
+  if (!pending.rowCount) return;
+  const prices = new Map<string, number>();
+  await Promise.all([...new Set(pending.rows.map((row) => row.market as string))].map(async (market) => prices.set(market, await getStrikePrice(market))));
+  const triggered = pending.rows.filter((row) => {
+    const mark = prices.get(row.market as string)!;
+    const takeProfit = row.take_profit_price as number | null;
+    const stopLoss = row.stop_loss_price as number | null;
+    return row.side === "long"
+      ? (takeProfit !== null && mark >= takeProfit) || (stopLoss !== null && mark <= stopLoss)
+      : (takeProfit !== null && mark <= takeProfit) || (stopLoss !== null && mark >= stopLoss);
+  });
+  if (!triggered.length) return;
+  const client = await db().connect();
+  try {
+    await client.query("BEGIN");
+    for (const row of triggered) {
+      const found = await client.query(
+        `SELECT p.size::float,p.entry_price::float,p.take_profit_price::float,p.stop_loss_price::float,
+                s.limits,s.name AS strategy_name
+         FROM paper_positions p JOIN strategies s ON s.id=p.strategy_id
+         WHERE p.user_id=$1 AND p.strategy_id=$2 AND p.market=$3 AND p.side=$4 FOR UPDATE`,
+        [userId, row.strategy_id, row.market, row.side],
+      );
+      if (!found.rowCount) continue;
+      const position = found.rows[0];
+      const mark = prices.get(row.market as string)!;
+      const pnl = (row.side === "long" ? 1 : -1) * position.size * (mark - position.entry_price);
+      const target = row.side === "long"
+        ? (position.take_profit_price !== null && mark >= position.take_profit_price ? "Take profit" : "Stop loss")
+        : (position.take_profit_price !== null && mark <= position.take_profit_price ? "Take profit" : "Stop loss");
+      const account = await client.query(
+        `UPDATE paper_accounts SET cash_balance=cash_balance+$2,updated_at=now() WHERE user_id=$1 RETURNING cash_balance::float`,
+        [userId, pnl],
+      );
+      await client.query(
+        `DELETE FROM paper_positions WHERE user_id=$1 AND strategy_id=$2 AND market=$3 AND side=$4`,
+        [userId, row.strategy_id, row.market, row.side],
+      );
+      await client.query(
+        `INSERT INTO paper_ledger(id,user_id,event_type,amount,balance_after,description,reference_id)
+         VALUES($1,$2,'realized_pnl',$3,$4,$5,$6)`,
+        [randomUUID(), userId, pnl, account.rows[0].cash_balance, `${target}: ${row.side.toUpperCase()} ${row.market} closed at Strike mark`, row.strategy_id],
+      );
+      const auditId = randomUUID();
+      await client.query(
+        `INSERT INTO audit_events(id,strategy_id,user_id,market,side,notional_usd,price,allowed,reasons,reason,mode,event_kind,limits_snapshot,portfolio_snapshot,decision_snapshot,event_hash)
+         VALUES($1,$2,$3,$4,$5,$6,$7,true,'[]',$8,'paper','close',$9,$10,$11,$12)`,
+        [auditId, row.strategy_id, userId, row.market, row.side, position.size * mark, mark, `${target} triggered`, JSON.stringify(found.rows[0].limits), JSON.stringify({ trigger: target, realizedPnlUsd: pnl }), JSON.stringify({ allowed: true }), hashAudit({ auditId, target, market: row.market, mark, pnl })],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 function hashAudit(payload: object) {
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }
@@ -310,7 +381,7 @@ export async function closePaperPosition(
   try {
     await client.query("BEGIN");
     const found = await client.query(
-      `SELECT p.size::float,p.entry_price::float,s.name AS strategy_name
+      `SELECT p.size::float,p.entry_price::float,s.name AS strategy_name,s.limits
        FROM paper_positions p JOIN strategies s ON s.id=p.strategy_id
        WHERE p.user_id=$1 AND p.strategy_id=$2 AND p.market=$3 AND p.side=$4 FOR UPDATE`,
       [userId, input.strategyId, input.market, input.side],
@@ -324,7 +395,7 @@ export async function closePaperPosition(
       [userId, pnl],
     );
     await client.query(
-      `DELETE FROM paper_positions WHERE user_id=$1 AND strategy_id=$2 AND market=$3 AND side=$4`,
+          `DELETE FROM paper_positions WHERE user_id=$1 AND strategy_id=$2 AND market=$3 AND side=$4`,
       [userId, input.strategyId, input.market, input.side],
     );
     const ledgerId = randomUUID();
@@ -332,6 +403,12 @@ export async function closePaperPosition(
       `INSERT INTO paper_ledger(id,user_id,event_type,amount,balance_after,description,reference_id)
        VALUES($1,$2,'realized_pnl',$3,$4,$5,$6)`,
       [ledgerId, userId, pnl, account.rows[0].cash_balance, `${input.side.toUpperCase()} ${input.market} closed at Strike mark`, input.strategyId],
+    );
+    const auditId = randomUUID();
+    await client.query(
+      `INSERT INTO audit_events(id,strategy_id,user_id,market,side,notional_usd,price,allowed,reasons,reason,mode,event_kind,limits_snapshot,portfolio_snapshot,decision_snapshot,event_hash)
+       VALUES($1,$2,$3,$4,$5,$6,$7,true,'[]',$8,'paper','close',$9,$10,$11,$12)`,
+      [auditId, input.strategyId, userId, input.market, input.side, position.size * price, price, "Position closed manually", JSON.stringify(position.limits), JSON.stringify({ realizedPnlUsd: pnl, close: "manual" }), JSON.stringify({ allowed: true }), hashAudit({ auditId, market: input.market, price, pnl })],
     );
     await client.query("COMMIT");
     return { price, realizedPnlUsd: pnl, ledgerId };
@@ -355,6 +432,16 @@ export async function proposeTrade(userId: string, proposal: TradeProposal) {
     );
     if (!found.rowCount) throw new Error("Strategy not found.");
     const strategy = found.rows[0] as StrategyRow;
+    const config = (strategy.config ?? {}) as Partial<StrategyConfig>;
+    const configuredMarket = config.market || proposal.market;
+    const takeProfitPct = configuredMarket === proposal.market ? Number(config.takeProfitPct) : NaN;
+    const stopLossPct = configuredMarket === proposal.market ? Number(config.stopLossPct) : NaN;
+    const takeProfitPrice = Number.isFinite(takeProfitPct) && takeProfitPct > 0
+      ? price * (proposal.side === "long" ? 1 + takeProfitPct / 100 : 1 - takeProfitPct / 100)
+      : undefined;
+    const stopLossPrice = Number.isFinite(stopLossPct) && stopLossPct > 0
+      ? price * (proposal.side === "long" ? 1 - stopLossPct / 100 : 1 + stopLossPct / 100)
+      : undefined;
     if (strategy.owner_id !== userId)
       throw new Error("Only the strategy owner can propose a trade.");
     if (strategy.mode !== "paper")
@@ -442,12 +529,14 @@ export async function proposeTrade(userId: string, proposal: TradeProposal) {
       if (decision.allowed) {
         const size = proposal.notionalUsd / price;
         await client.query(
-          `INSERT INTO paper_positions(user_id,strategy_id,market,side,size,entry_price)
-          VALUES($1,$2,$3,$4,$5,$6)
+          `INSERT INTO paper_positions(user_id,strategy_id,market,side,size,entry_price,take_profit_price,stop_loss_price)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8)
           ON CONFLICT(user_id,strategy_id,market,side) DO UPDATE SET
           entry_price=(paper_positions.size*paper_positions.entry_price+EXCLUDED.size*EXCLUDED.entry_price)/(paper_positions.size+EXCLUDED.size),
-          size=paper_positions.size+EXCLUDED.size`,
-          [accountId, strategy.id, proposal.market, proposal.side, size, price],
+          size=paper_positions.size+EXCLUDED.size,
+          take_profit_price=EXCLUDED.take_profit_price,
+          stop_loss_price=EXCLUDED.stop_loss_price`,
+          [accountId, strategy.id, proposal.market, proposal.side, size, price, takeProfitPrice ?? null, stopLossPrice ?? null],
         );
       }
       decisions.push({ userId: accountId, auditId, decision });

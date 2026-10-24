@@ -18,7 +18,7 @@ export async function initializeDatabase() {
     );
     CREATE TABLE IF NOT EXISTS strategies (
       id uuid PRIMARY KEY, owner_id uuid NOT NULL REFERENCES users(id), name text NOT NULL,
-      description text NOT NULL DEFAULT '', mode text NOT NULL DEFAULT 'paper',
+      description text NOT NULL DEFAULT '', mode text NOT NULL DEFAULT 'paper', config jsonb NOT NULL DEFAULT '{}'::jsonb,
       limits jsonb NOT NULL, paused boolean NOT NULL DEFAULT false,
       created_at timestamptz NOT NULL DEFAULT now(),
       CHECK (mode IN ('paper','live'))
@@ -30,6 +30,7 @@ export async function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS paper_positions (
       user_id uuid NOT NULL REFERENCES users(id), strategy_id uuid NOT NULL REFERENCES strategies(id),
       market text NOT NULL, side text NOT NULL, size numeric NOT NULL, entry_price numeric NOT NULL,
+      take_profit_price numeric, stop_loss_price numeric,
       opened_at timestamptz NOT NULL DEFAULT now(),
       PRIMARY KEY(user_id,strategy_id,market,side)
     );
@@ -80,6 +81,9 @@ export async function initializeDatabase() {
     ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS execution_snapshot jsonb;
     ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS event_hash text;
     ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS opened_at timestamptz NOT NULL DEFAULT now();
+    ALTER TABLE strategies ADD COLUMN IF NOT EXISTS config jsonb NOT NULL DEFAULT '{}'::jsonb;
+    ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS take_profit_price numeric;
+    ALTER TABLE paper_positions ADD COLUMN IF NOT EXISTS stop_loss_price numeric;
   `).then(() => undefined);
   return schemaReady;
 }
