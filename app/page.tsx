@@ -285,6 +285,8 @@ export default function Home() {
     };
   }, [audit, strategies]);
 
+  const ownStrategy = strategies.find((strategy) => strategy.owner_id === user?.id);
+
   async function post(path: string, body: object) {
     const response = await fetch(path, {
       method: "POST",
@@ -705,12 +707,12 @@ export default function Home() {
                   </span>
                 </button>
                 <button
-                  onClick={() => strategies[0] && openStrategy(strategies[0])}
+                  onClick={() => ownStrategy ? openStrategy(ownStrategy) : changeView("publish")}
                 >
                   <b>03</b>
                   <span>
-                    <strong>Test a proposal</strong>
-                    <small>Watch one pass or hit a hard limit.</small>
+                    <strong>{ownStrategy ? "Test a proposal" : "Publish, then test"}</strong>
+                    <small>{ownStrategy ? "Watch one pass or hit a hard limit." : "Create your first strategy to open the paper order check."}</small>
                   </span>
                 </button>
                 <button onClick={() => changeView("audit")}>
