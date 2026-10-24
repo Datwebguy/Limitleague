@@ -126,6 +126,20 @@ const money = (value: number, digits = 0) =>
 const percent = (value: number | null) =>
   value === null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
 
+async function loadJson(path: string, attempts = 3) {
+  let response: Response | undefined;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      response = await fetch(path, { cache: "no-store" });
+      if (response.ok || attempt === attempts - 1) return response;
+    } catch {
+      if (attempt === attempts - 1) throw new Error(`${path} is unavailable.`);
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 250 * (attempt + 1)));
+  }
+  throw new Error(`${path} is unavailable.`);
+}
+
 function Icon({
   name,
 }: {
@@ -219,24 +233,19 @@ export default function Home() {
 
   const refresh = useCallback(async () => {
     try {
-      const [sessionResponse, ...responses] = await Promise.all([
-        fetch("/api/session"),
-        fetch("/api/strategies"),
-        fetch("/api/audit"),
-        fetch("/api/portfolio"),
-        fetch("/api/markets"),
-      ]);
+      const paths = ["/api/session", "/api/strategies", "/api/audit", "/api/portfolio", "/api/markets"];
+      const [sessionResponse, ...responses] = await Promise.all(paths.map((path) => loadJson(path)));
       const [session, strategyData, auditData, portfolioData, marketData] = await Promise.all(
         [sessionResponse, ...responses].map((response) => response.json()),
       );
       if (!sessionResponse.ok)
         throw new Error(session.error ?? "Paper workspace is unavailable.");
-      if (responses.some((response) => !response.ok))
-        throw new Error(
-          strategyData.error ??
-            auditData.error ??
-            "Could not load LimitLeague.",
-        );
+      const failedIndex = responses.findIndex((response) => !response.ok);
+      if (failedIndex !== -1) {
+        const failedPath = paths[failedIndex + 1];
+        const failedData = [strategyData, auditData, portfolioData, marketData][failedIndex] as { error?: string };
+        throw new Error(failedData.error ?? `${failedPath} is temporarily unavailable. Please refresh.`);
+      }
       setUser(session.user);
       setStrategies(strategyData.strategies);
       setAudit(auditData.audit);
