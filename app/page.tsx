@@ -234,12 +234,16 @@ export default function Home() {
   const refresh = useCallback(async () => {
     try {
       const paths = ["/api/session", "/api/strategies", "/api/audit", "/api/portfolio", "/api/markets"];
-      const [sessionResponse, ...responses] = await Promise.all(paths.map((path) => loadJson(path)));
-      const [session, strategyData, auditData, portfolioData, marketData] = await Promise.all(
-        [sessionResponse, ...responses].map((response) => response.json()),
-      );
+      // Establish the HTTP-only paper session before the other routes open database work.
+      // Parallel first-load requests can otherwise race while Neon creates the workspace.
+      const sessionResponse = await loadJson(paths[0]);
+      const session = await sessionResponse.json();
       if (!sessionResponse.ok)
         throw new Error(session.error ?? "Paper workspace is unavailable.");
+      const responses = await Promise.all(paths.slice(1).map((path) => loadJson(path)));
+      const [strategyData, auditData, portfolioData, marketData] = await Promise.all(
+        responses.map((response) => response.json()),
+      );
       const failedIndex = responses.findIndex((response) => !response.ok);
       if (failedIndex !== -1) {
         const failedPath = paths[failedIndex + 1];
