@@ -10,16 +10,16 @@ import type { Strategy, TradeSide } from "../_lib/types";
 import { Icon } from "./Icon";
 import { MarketPicker } from "./MarketPicker";
 import { TokenLogo } from "./TokenLogo";
-import { ConfirmDialog, Hint, Meter } from "./ui";
+import { Badge, ConfirmDialog, Hint, Meter } from "./ui";
 
 export function TradeForm({ strategy }: { strategy: Strategy }) {
-  const { markets, portfolio, placeTrade, strikeAccount, prepareRealTrade, sendRealOrder, notify } = useStore();
+  const { markets, portfolio, placeTrade, strikeAccount, prepareRealTrade, sendRealOrder, notify, mode } = useStore();
   const fixed = strategy.config?.market;
   const [market, setMarket] = useState(fixed ?? "");
   const [side, setSide] = useState<TradeSide>("long");
   const [size, setSize] = useState("");
   const [note, setNote] = useState("");
-  const [real, setReal] = useState(false);
+  const real = mode === "real";
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<TradeResult | null>(null);
   const [draft, setDraft] = useState<RealTradeDraft | null>(null);
@@ -73,17 +73,12 @@ export function TradeForm({ strategy }: { strategy: Strategy }) {
     <form className="card card-pad tradeform" onSubmit={submit}>
       <div className="card-head">
         <h2>Place a trade</h2>
-        {strikeAccount && (
-          <div className="seg" role="group" aria-label="Practice or real money">
-            <button type="button" className={!real ? "on" : ""} onClick={() => { setReal(false); setResult(null); }}>Practice</button>
-            <button type="button" className={real ? "on seg-warn" : ""} onClick={() => { setReal(true); setResult(null); }}>Real money</button>
-          </div>
-        )}
+        <Badge tone={real ? "warn" : "brand"}>{real ? "Real money" : "Practice"}</Badge>
       </div>
       <p className="muted-text">
         {real
-          ? "Your Strike account is checked first. If the trade stays within the limits, you’ll confirm before anything is sent."
-          : "This uses practice money at live Strike prices. Followers get the same trade in their own practice accounts."}
+          ? "Your Strike account is checked first. If the trade stays within the limits, you’ll confirm before anything is sent. Use the switch at the top to go back to Practice."
+          : "This uses practice money at live Strike prices. Followers get the same trade in their own practice accounts. To trade for real, connect Strike under My account and switch to Real."}
       </p>
 
       {fixed ? (

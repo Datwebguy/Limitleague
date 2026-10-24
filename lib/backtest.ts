@@ -1,6 +1,6 @@
 import { evaluateExit } from "./exits";
 import type { HardLimits, StrategyConfig } from "./types";
-import type { StrikeCandle } from "./strike/client";
+import type { StrikeCandle } from "../app/_lib/types-candle";
 
 const FEE_RATE = 0.0005; // charged on entry and again on exit
 const STARTING_EQUITY = 10_000;

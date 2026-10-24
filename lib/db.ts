@@ -111,6 +111,7 @@ const schema = `
     CREATE INDEX IF NOT EXISTS paper_ledger_user_time ON paper_ledger(user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS paper_ledger_reference ON paper_ledger(reference_id, event_type);
     CREATE INDEX IF NOT EXISTS users_ip_time ON users(ip_hash, created_at);
+    CREATE TABLE IF NOT EXISTS job_runs (name text PRIMARY KEY, last_run timestamptz NOT NULL);
 `;
 
 /**

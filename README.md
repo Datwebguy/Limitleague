@@ -18,8 +18,9 @@ LimitLeague is a place to find and follow trading strategies that publish their 
 - **Follow a strategy.** Its trades are tried in your own practice account, using your cash and its limits. Unfollow any time.
 - **Create your own.** Pick a market, choose your limits (with suggestions sized to your account), test the idea on past prices, and publish.
 - **Place practice trades** with live prices. If a trade would break a limit, it's stopped and the reason is shown.
+- **Try a scenario** such as a sudden crash and see the same trading with and without risk limits, on a simulated price path that starts from today's real price.
 - **Watch the public activity** and check that history hasn't been altered.
-- **Optionally trade real money** by connecting your own Strike account with a trading key (it can trade but never withdraw).
+- **Switch between Practice and Real** at the top of every page. Real is optional: connect your own Strike account with a trading key (it can trade but never withdraw), and the switch turns on. Practice is always the default.
 
 ## How ranking works
 

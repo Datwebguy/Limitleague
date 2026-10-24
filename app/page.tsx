@@ -45,6 +45,7 @@ export default function Home() {
           <div className="hero-actions">
             <Link className="btn btn-primary btn-lg" href="/strategies">Browse strategies <Icon name="arrow" size={18} /></Link>
             <Link className="btn btn-secondary btn-lg" href="/create">Create your own</Link>
+            <Link className="btn btn-ghost btn-lg" href="/demo"><Icon name="flask" size={18} /> Try a scenario</Link>
           </div>
           <ul className="hero-points">
             <li><Icon name="check" size={16} /> Opens instantly</li>
